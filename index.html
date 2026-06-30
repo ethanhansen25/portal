@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CEO Hub</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">CH</div>
+        <div>
+          <h1>CEO Hub</h1>
+          <p id="dateline" class="dateline"></p>
+        </div>
+      </div>
+      <div class="stats" id="stats">
+        <div class="stat">
+          <span class="stat-num" id="statActive">0</span>
+          <span class="stat-label">Active</span>
+        </div>
+        <div class="stat">
+          <span class="stat-num" id="statDone">0</span>
+          <span class="stat-label">Done</span>
+        </div>
+        <div class="stat">
+          <span class="stat-num" id="statUrgent">0</span>
+          <span class="stat-label">Urgent</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+
+      <section class="panel actions-panel">
+        <div class="panel-head">
+          <h2>Quick Actions</h2>
+          <p>Click any item to add it to your to‑do list.</p>
+        </div>
+
+        <div class="action-groups" id="actionGroups"></div>
+
+        <form class="custom-form" id="customForm">
+          <h3>Add something else</h3>
+          <div class="custom-row">
+            <input type="text" id="customText" placeholder="Anything you need to do or track..." autocomplete="off" required />
+            <select id="customCategory"></select>
+            <select id="customPriority">
+              <option value="high">High</option>
+              <option value="medium" selected>Medium</option>
+              <option value="low">Low</option>
+            </select>
+            <button type="submit" class="btn btn-primary">Add</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel list-panel">
+        <div class="panel-head list-head">
+          <h2>To‑Do List</h2>
+          <div class="filters" id="filters">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="active">Active</button>
+            <button class="filter-btn" data-filter="done">Completed</button>
+          </div>
+        </div>
+
+        <div class="sort-row">
+          <label for="sortBy">Sort by</label>
+          <select id="sortBy">
+            <option value="priority">Priority</option>
+            <option value="newest">Newest</option>
+            <option value="oldest">Oldest</option>
+            <option value="category">Category</option>
+          </select>
+          <button class="btn btn-ghost" id="clearDone">Clear completed</button>
+        </div>
+
+        <ul id="todoList" class="todo-list"></ul>
+
+        <p id="emptyState" class="empty-state">No tasks yet — click a quick action to get started.</p>
+      </section>
+
+    </main>
+
+    <footer class="footer">
+      <span>Stored locally in this browser. Nothing leaves your device.</span>
+    </footer>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
