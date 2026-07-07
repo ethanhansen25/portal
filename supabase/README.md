@@ -44,26 +44,35 @@ silently disappearing. The fix moves denial logging into its own
 `log_denied_attempt()` RPC that the client calls in a fresh request right
 after it catches the error, mirroring how the old client-side code did it.
 
-## To actually connect a project
+## Status — wired
 
-I need two values from your Supabase project's **Settings → API** page:
+The app is now connected to a live project. `js/config.js` holds the project
+URL and **publishable** key (safe for the browser; the `service_role` key is
+never used client-side). The client-side data layer (`js/db.js`) reads and
+writes these tables through Supabase, real email/password auth has replaced
+the old demo login, and the localStorage seed is gone — a fresh install
+starts empty and the first person to sign up becomes Owner.
 
-1. **Project URL** (`https://xxxxx.supabase.co`)
-2. **`anon` public key**
+## The one manual step: apply the schema
 
-(Never the `service_role` key — that one must never ship to a browser. The
-`anon` key is meant to be public; RLS is what actually enforces access, and
-that's exactly what these migrations do.)
+The migrations still need to run against the project once. Open the Supabase
+dashboard → **SQL Editor** and run, in order:
 
-Once I have those, next steps are:
+1. `migrations/0001_schema.sql`
+2. `migrations/0002_rls.sql`
+3. `migrations/0003_functions.sql`
 
-1. Run these three migrations against your project (via the Supabase SQL
-   editor, or `supabase db push` if you're using the CLI).
-2. Wire `js/supabaseClient.js` with your URL/anon key and replace the
-   click-to-impersonate login screen with real Supabase Auth (email +
-   password, or magic link).
-3. Rework the `js/core.js` store to read/write Supabase instead of
-   localStorage, with Realtime subscriptions keeping every signed-in user's
-   view in sync.
-4. Remove `js/data.js` (the seed/demo data) entirely — a fresh install
-   starts completely empty; the first person to sign up becomes Owner.
+(Or, with the Supabase CLI linked to the project: `supabase db push`.)
+
+Until that's done, sign-up will report that the schema isn't applied yet.
+After it's done, create the first account — that account becomes the Owner,
+and everyone who signs up afterward lands as an unassigned member for HR or
+an executive to place into a department and role.
+
+### Auth settings
+
+By default Supabase requires email confirmation. For a quick internal
+rollout you can turn that off under **Authentication → Providers → Email**
+(“Confirm email” off); otherwise new users get a confirmation link before
+their first sign-in. The app handles both — it tells the user to check their
+email when confirmation is required.
