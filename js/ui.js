@@ -22,7 +22,8 @@
     const u = typeof userId === "string" ? S().user(userId) : userId;
     if (!u) return `<span class="avatar ${size}" style="--av:#3a3a42">—</span>`;
     const hue = [...u.id].reduce((s, c) => s + c.charCodeAt(0), 0) % 360;
-    return `<span class="avatar ${size}" title="${esc(u.name)}" style="--av:hsl(${hue},32%,30%)">${U.initials(u.name)}${u.online ? '<i class="dot-online"></i>' : ""}</span>`;
+    const inner = u.avatarUrl ? `<img src="${esc(u.avatarUrl)}" alt="" class="avatar-img">` : U.initials(u.name);
+    return `<span class="avatar ${size}" title="${esc(u.name)}" style="--av:hsl(${hue},32%,30%)">${inner}${u.online ? '<i class="dot-online"></i>' : ""}</span>`;
   }
   function userCell(userId) {
     const u = S().user(userId);
@@ -240,6 +241,7 @@
             : f.options.map((o) => Array.isArray(o) ? o : [o, U.cap(o)]);
           input = dropdownHtml(f.name, opts, f.value, { placeholder: f.placeholder, required: f.required });
         } else if (f.type === "readonly") input = `<div class="form-readonly">${esc(f.value || "—")}</div>`;
+        else if (f.type === "file") input = `<input type="file" name="${f.name}" ${req} ${f.accept ? `accept="${esc(f.accept)}"` : ""} class="file-input">`;
         else input = `<input type="${f.type || "text"}" name="${f.name}" ${req} value="${esc(f.value != null ? f.value : "")}" placeholder="${esc(f.placeholder || "")}" ${f.step ? `step="${f.step}"` : ""}>`;
         // A <div>, not <label>: wrapping the custom dropdown in a <label> with
         // no `for` makes the browser forward stray clicks to the label's
@@ -264,6 +266,8 @@
       onMount(wrap, close) {
         initDropdowns(wrap);
         const formEl = wrap.querySelector("form");
+        const submitBtn = formEl.querySelector('button[type="submit"]');
+        const submitLabelText = submitBtn.textContent;
         formEl.addEventListener("submit", (e) => {
           e.preventDefault();
           const missing = [...formEl.querySelectorAll('.dropdown[data-required="1"]')].find((d) => !d.querySelector('input[type="hidden"]').value);
@@ -272,10 +276,25 @@
             missing.querySelector(".dropdown-trigger").focus();
             return;
           }
+          // onSubmit may be sync or return a Promise (e.g. a file upload) —
+          // handle both the same way, disabling the button so a slow upload
+          // can't be double-submitted, and surfacing async rejections too
+          // (a plain try/catch only catches what throws before the first await).
+          let result;
           try {
-            onSubmit(formValues(formEl), close);
+            result = onSubmit(formValues(formEl), close);
           } catch (err) {
             toast(err.message, "bad");
+            return;
+          }
+          if (result && typeof result.then === "function") {
+            submitBtn.disabled = true;
+            submitBtn.textContent = opts.pendingLabel || "Saving…";
+            result.catch((err) => {
+              toast(err.message, "bad");
+              submitBtn.disabled = false;
+              submitBtn.textContent = submitLabelText;
+            });
           }
         });
         const first = wrap.querySelector("input:not([type=hidden]), textarea");

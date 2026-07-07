@@ -415,7 +415,7 @@
       el.querySelectorAll("[data-dl]").forEach((b) => b.addEventListener("click", () => {
         const r = S.find("resource", b.dataset.dl);
         S.audit("export", "resource", r.id, "Downloaded — " + r.name);
-        ui.toast("Download started: " + r.name, "info");
+        OM.actions.openAttachment(r.storagePath);
       }));
       el.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
         const r = S.find("resource", b.dataset.view);
@@ -428,13 +428,18 @@
       }));
       const up = el.querySelector("#upRes");
       if (up) up.addEventListener("click", () => ui.formModal("Upload to library", [
+        { name: "file", label: "File", type: "file", required: true, span2: true },
         { name: "name", label: "Resource name", required: true, span2: true },
         { name: "category", label: "Category", type: "select", options: ["Contracts", "Handbooks", "Templates", "SOPs", "Production", "Creative", "Sales", "Finance", "Technology", "HR", "Legal", "Brand Assets", "Training", "Equipment Guides", "Marketing", "Archive"] },
-        { name: "type", label: "File type", type: "select", options: ["pdf", "docx", "xlsx", "zip", "mp4"] },
         { name: "minRole", label: "Minimum role", type: "select", options: Object.entries(OM.ROLES).filter(([k]) => !OM.ROLES[k].exec).map(([k, v]) => [k, v.label]).reverse() },
         { name: "tags", label: "Tags (comma-separated)", span2: true },
-      ], (v, close) => {
-        S.create("resource", { name: v.name, category: v.category, type: v.type, size: 250000, uploadedBy: S.meId, uploadedAt: Date.now(), tags: (v.tags || "").split(",").map((s2) => s2.trim()).filter(Boolean), minRole: v.minRole, version: 1 }, "Uploaded resource — " + v.name);
+      ], async (v, close) => {
+        const file = v.file;
+        if (!file || !file.size) throw new Error("Choose a file to upload.");
+        const resId = S.uid();
+        const { path } = await OM.db.uploadAttachment("resources", resId, file);
+        const ext = (file.name.split(".").pop() || "").toLowerCase();
+        S.create("resource", { id: resId, name: v.name, category: v.category, type: ext, storagePath: path, size: file.size, uploadedBy: S.meId, uploadedAt: Date.now(), tags: (v.tags || "").split(",").map((s2) => s2.trim()).filter(Boolean), minRole: v.minRole, version: 1 }, "Uploaded resource — " + v.name);
         close(); ui.toast("Uploaded to library.", "good"); draw();
       }));
     }
@@ -460,7 +465,14 @@
         { key: "version", label: "Ver", render: (d) => "v" + d.version },
         { key: "uploadedBy", label: "By", render: (d) => esc(S.userName(d.uploadedBy)) },
         { key: "uploadedAt", label: "Date", render: (d) => U.date(d.uploadedAt), sortVal: (d) => d.uploadedAt },
+        { key: "act", label: "", render: (d) => d.storagePath ? `<button class="btn btn-ghost btn-sm" data-open="${d.id}">⤓ Download</button>` : '<span class="muted">—</span>' },
       ],
+      afterRender: (host) => host.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const d = S.find("document", b.dataset.open);
+        S.audit("export", "document", d.id, "Downloaded — " + d.name);
+        OM.actions.openAttachment(d.storagePath);
+      })),
     });
   };
 
@@ -577,15 +589,31 @@
     const myAudit = S.db.audit.filter((a) => a.userId === me.id).slice(-10).reverse();
     el.innerHTML = ui.pageHead("Profile & settings", "") +
       `<div class="grid-2"><div>` +
-      ui.sectionCard("My profile", `<div class="profile-row">${ui.avatar(me, "lg")}
-        <div><b>${esc(me.name)}</b><div class="muted">${esc(me.title)} · ${esc(me.dept)}</div>
-        <span class="badge tone-${S.isExec(me) ? "warn" : "neutral"}">${OM.ROLES[me.role].label}</span></div></div>
-        <div class="detail-grid">
+      ui.sectionCard("My profile", `
+        <div class="profile-row">
+          <div class="avatar-upload" id="avatarUpload">
+            ${ui.avatar(me, "xl")}
+            <div class="avatar-upload-overlay">⤒</div>
+            <input type="file" id="avatarFile" accept="image/png,image/jpeg,image/webp" hidden>
+          </div>
+          <div><b>${esc(me.name)}</b><div class="muted">${esc(me.title || "No title set")} · ${esc(me.dept)}</div>
+          <span class="badge tone-${S.isExec(me) ? "warn" : "neutral"}">${OM.ROLES[me.role].label}</span></div>
+        </div>
+        <form class="om-form" id="profileForm">
+          <div class="form-grid">
+            <label class="form-field"><span class="form-label">Full name</span><input type="text" name="name" value="${esc(me.name)}" required></label>
+            <label class="form-field"><span class="form-label">Phone</span><input type="text" name="phone" value="${esc(me.phone || "")}" placeholder="(555) 555-0100"></label>
+            <label class="form-field span2"><span class="form-label">Title</span><input type="text" name="title" value="${esc(me.title || "")}" placeholder="e.g. Senior Editor"></label>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn btn-gold btn-sm">Save profile</button></div>
+        </form>
+        <div class="detail-grid" style="margin-top:14px">
           <div><span class="detail-label">Email</span><b>${esc(me.email)}</b></div>
-          <div><span class="detail-label">Phone</span><b>${esc(me.phone)}</b></div>
+          <div><span class="detail-label">Department / role</span><b>${esc(me.dept)} · ${OM.ROLES[me.role].label}</b></div>
           <div><span class="detail-label">Joined</span><b>${U.date(me.hireDate)}</b></div>
           <div><span class="detail-label">Access level</span><b>${OM.ROLES[me.role].level}</b></div>
-        </div>`) +
+        </div>
+        <p class="footnote">Department and role are placed by HR or an executive — reach out to change those.</p>`) +
       ui.sectionCard("My time off", myTimeOff.map((t) => `<div class="list-row"><span class="list-main">${esc(t.type)} · ${U.dateShort(t.start)} → ${U.dateShort(t.end)}</span>${ui.badge(t.status)}</div>`).join("") + `
         <div class="row-gap"><button class="btn btn-gold btn-sm" id="reqTO">+ Request time off</button></div>`) +
       `</div><div>` +
@@ -607,6 +635,34 @@
       close(); ui.toast("Request submitted for approval.", "good"); OM.router.refresh();
     }));
     el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; location.reload(); });
+
+    el.querySelector("#profileForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const v = ui.formValues(e.target);
+      S.update("user", me.id, { name: v.name, phone: v.phone, title: v.title }, "Updated own profile");
+      ui.toast("Profile saved.", "good");
+      OM.router.refresh();
+    });
+
+    const avatarWrap = el.querySelector("#avatarUpload");
+    const avatarInput = el.querySelector("#avatarFile");
+    avatarWrap.addEventListener("click", () => avatarInput.click());
+    avatarInput.addEventListener("change", async () => {
+      const file = avatarInput.files[0];
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) { ui.toast("Image must be under 5MB.", "bad"); return; }
+      avatarWrap.classList.add("uploading");
+      try {
+        const url = await OM.db.uploadAvatar(me.id, file);
+        S.update("user", me.id, { avatarUrl: url }, "Updated profile photo");
+        ui.toast("Profile photo updated.", "good");
+        OM.router.refresh();
+      } catch (err) {
+        ui.toast("Upload failed: " + err.message, "bad");
+      } finally {
+        avatarWrap.classList.remove("uploading");
+      }
+    });
   };
 
   function permSummary(me) {

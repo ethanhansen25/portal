@@ -161,6 +161,21 @@
       </div>`).join("");
     const bc = document.getElementById("bellCount");
     if (bc) { const n = S.unreadCount(); bc.textContent = n || ""; bc.style.display = n ? "" : "none"; }
+    refreshMeChip();
+  }
+
+  // The sidebar me-chip and topbar avatar button are part of the shell, not
+  // #content, so a plain route render wouldn't pick up a changed name/photo —
+  // called from renderNav() so it stays current on every navigation.
+  function refreshMeChip() {
+    const me = S.me();
+    if (!me) return;
+    const chip = document.getElementById("meChip");
+    if (chip) chip.innerHTML = `${ui.avatar(me)}<div class="me-info"><b>${esc(me.name)}</b><span>${OM.ROLES[me.role].label}</span></div>`;
+    const userBtn = document.getElementById("userBtn");
+    if (userBtn) userBtn.innerHTML = ui.avatar(me);
+    const umHead = document.querySelector(".um-head");
+    if (umHead) umHead.innerHTML = `<b>${esc(me.name)}</b><span class="muted">${esc(me.title || "")}</span>`;
   }
 
   function bindShell() {
