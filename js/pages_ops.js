@@ -795,7 +795,7 @@
       S.notify([S.deptHeadId(me.dept)].filter(Boolean), "hr", "Time off request: " + me.name, v.days + "d " + v.type, "#/approvals");
       close(); ui.toast("Request submitted for approval.", "good"); OM.router.refresh();
     }));
-    el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; location.reload(); });
+    el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; OM.renderLogin(); });
 
     el.querySelector("#profileForm").addEventListener("submit", (e) => {
       e.preventDefault();

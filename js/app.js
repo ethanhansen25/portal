@@ -506,5 +506,6 @@
   }
 
   OM.enterApp = enterApp;
+  OM.renderLogin = renderLogin;
   document.addEventListener("DOMContentLoaded", boot);
 })();

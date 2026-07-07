@@ -360,9 +360,9 @@
         case "hrNote": case "onboardingTemplate": case "onboardingAssignment":
           return dept === "Human Resources";
         case "deliverable": {
-          if (action === "view") return !rec || inMyProjects(rec.projectId);
-          if (action === "create") return ["Production", "Creative"].includes(dept);
-          if (action === "edit") return (rec && own(rec, "uploadedBy")) || inMyProjects(rec && rec.projectId);
+          if (action === "view") return !rec || role === "dept_head" || inMyProjects(rec.projectId);
+          if (action === "create") return role === "dept_head" || ["Production", "Creative"].includes(dept);
+          if (action === "edit") return role === "dept_head" || (rec && own(rec, "uploadedBy")) || inMyProjects(rec && rec.projectId);
           return false; // delete = dept_head/exec only (handled by exec bypass above)
         }
         case "contract": case "proposal":

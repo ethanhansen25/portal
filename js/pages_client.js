@@ -69,7 +69,7 @@
     const userBtn = document.getElementById("userBtn"), menu = document.getElementById("userMenu");
     userBtn.addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("open"); });
     document.addEventListener("click", () => menu.classList.remove("open"));
-    document.getElementById("signOut").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; location.reload(); });
+    document.getElementById("signOut").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; OM.renderLogin(); });
   };
 
   function renderNav() {
@@ -451,6 +451,6 @@
       try { const url = await OM.db.uploadAvatar(u.id, file); S.update("user", u.id, { avatarUrl: url }, "Updated profile photo"); ui.toast("Photo updated.", "good"); CP.router.refresh(); }
       catch (err) { ui.toast("Upload failed: " + err.message, "bad"); }
     });
-    el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; location.reload(); });
+    el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; OM.renderLogin(); });
   };
 })();
