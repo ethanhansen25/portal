@@ -25,7 +25,7 @@
   const E = {
     user: {
       table: "profiles", coll: "users",
-      cols: { id: "id", name: "name", email: "email", phone: "phone", role: "role", dept: "dept", title: "title", hire_date: "hireDate", status: "status", last_active_at: "lastActiveAt", created_at: "createdAt" },
+      cols: { id: "id", name: "name", email: "email", phone: "phone", role: "role", dept: "dept", title: "title", hire_date: "hireDate", status: "status", last_active_at: "lastActiveAt", avatar_url: "avatarUrl", created_at: "createdAt" },
       dates: ["hireDate"], readonlyCreate: true,
     },
     client: {
@@ -276,5 +276,35 @@
     },
     // raw table helpers for join/child tables
     from(table) { return DB.client.from(table); },
+
+    /* ---------- STORAGE ----------
+       avatars: public bucket, path {userId}/{filename} — RLS restricts write
+       to the user's own folder (supabase/migrations/0004_storage.sql).
+       attachments: private bucket, path {resources|documents}/{recordId}/
+       {filename} — RLS re-checks the same visibility as the owning table row. */
+    async uploadAvatar(userId, file) {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+      const path = `${userId}/avatar-${Date.now()}.${ext}`;
+      const { error } = await DB.client.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+      if (error) throw error;
+      const { data } = DB.client.storage.from("avatars").getPublicUrl(path);
+      return data.publicUrl;
+    },
+    async uploadAttachment(kind, recordId, file) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `${kind}/${recordId}/${Date.now()}-${safeName}`;
+      const { error } = await DB.client.storage.from("attachments").upload(path, file, { contentType: file.type });
+      if (error) throw error;
+      return { path, size: file.size, type: file.type, name: file.name };
+    },
+    async attachmentSignedUrl(path, seconds = 300) {
+      const { data, error } = await DB.client.storage.from("attachments").createSignedUrl(path, seconds);
+      if (error) throw error;
+      return data.signedUrl;
+    },
+    async deleteAttachment(path) {
+      const { error } = await DB.client.storage.from("attachments").remove([path]);
+      if (error) throw error;
+    },
   });
 })();

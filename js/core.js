@@ -344,7 +344,12 @@
           return rec ? rec.userId === u.id : true;
         case "user":
           if (action === "view") return true;
-          return false; // profile edits routed through HR/exec
+          // Self-service: name/phone/title/avatar. Role/dept/status placement
+          // is routed through S.updateProfile() (HR/exec only) instead, and
+          // is additionally guarded server-side by the enforce_profile_update
+          // trigger regardless of what a client sends.
+          if (action === "edit") return rec && rec.id === u.id;
+          return false;
         default:
           return false;
       }

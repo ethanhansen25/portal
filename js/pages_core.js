@@ -178,8 +178,10 @@
           { key: "version", label: "Ver", render: (d) => "v" + d.version },
           { key: "uploadedBy", label: "Uploaded by", render: (d) => esc(S.userName(d.uploadedBy)) },
           { key: "uploadedAt", label: "Date", render: (d) => U.date(d.uploadedAt), sortVal: (d) => d.uploadedAt },
+          { key: "act", label: "", render: (d) => d.storagePath ? `<button class="btn btn-ghost btn-sm" data-open="${d.id}">⤓</button>` : "" },
         ],
         empty: "No files on this project yet.",
+        afterRender: (host) => host.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); OM.actions.openAttachment(S.find("document", b.dataset.open).storagePath); })),
       });
     } else if (tab === "budget") {
       if (!showMoney) { body.innerHTML = ui.empty("Budget details are restricted to the project lead, department heads, finance, and executives.", "🔒"); return; }
@@ -262,14 +264,32 @@
   };
   OM.actions.uploadDoc = function (projectId, clientId) {
     ui.formModal("Upload document", [
+      { name: "file", label: "File", type: "file", required: true, span2: true },
       { name: "name", label: "Document name", required: true, span2: true },
       { name: "category", label: "Category", type: "select", options: ["Contracts", "NDAs", "Releases", "Project Documents", "Invoices", "Legal Documents", "Client Files"] },
-      { name: "type", label: "File type", type: "select", options: ["pdf", "docx", "xlsx", "zip", "mp4"] },
+      { name: "confidential", label: "Access", type: "select", options: [["false", "Company-wide (subject to normal rules)"], ["true", "Confidential — executives only"]] },
       { name: "tags", label: "Tags (comma-separated)" },
-    ], (v, close) => {
-      S.create("document", { name: v.name, category: v.category, type: v.type, size: 250000, projectId: projectId || null, clientId: clientId || null, uploadedBy: S.meId, uploadedAt: Date.now(), tags: (v.tags || "").split(",").map((s) => s.trim()).filter(Boolean), confidential: false, version: 1 }, "Uploaded document — " + v.name);
+    ], async (v, close) => {
+      const file = v.file;
+      if (!file || !file.size) throw new Error("Choose a file to upload.");
+      const docId = S.uid();
+      const { path } = await OM.db.uploadAttachment("documents", docId, file);
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      S.create("document", { id: docId, name: v.name, category: v.category, type: ext, storagePath: path, size: file.size, projectId: projectId || null, clientId: clientId || null, uploadedBy: S.meId, uploadedAt: Date.now(), tags: (v.tags || "").split(",").map((s) => s.trim()).filter(Boolean), confidential: v.confidential === "true", version: 1 }, "Uploaded document — " + v.name);
       close(); ui.toast("Document uploaded.", "good"); OM.router.refresh();
     });
+  };
+
+  // Fetches a short-lived signed URL for a private attachment and opens it —
+  // used for both document and resource downloads.
+  OM.actions.openAttachment = async function (storagePath) {
+    if (!storagePath) { ui.toast("This record has no file attached.", "bad"); return; }
+    try {
+      const url = await OM.db.attachmentSignedUrl(storagePath);
+      window.open(url, "_blank", "noopener");
+    } catch (err) {
+      ui.toast("Couldn't open file: " + err.message, "bad");
+    }
   };
 
   function visibleTasks() {
@@ -534,8 +554,9 @@
       renderCommsPanel(body, () => S.db.comms.filter((x) => x.clientId === c.id), { clientId: c.id });
     } else if (tab === "files") {
       body.innerHTML = `<div class="card card-flush">` + (cDocs.map((d) => `
-        <div class="list-row"><span class="file-icon">${d.type.toUpperCase()}</span><span class="list-main"><b>${esc(d.name)}</b><span class="muted">${esc(d.category)} · v${d.version} · ${U.fileSize(d.size)} · ${esc(S.userName(d.uploadedBy))}</span></span><span class="muted">${U.date(d.uploadedAt)}</span></div>`).join("") || ui.empty("No files.")) + "</div>" +
+        <div class="list-row"><span class="file-icon">${d.type.toUpperCase()}</span><span class="list-main"><b>${esc(d.name)}</b><span class="muted">${esc(d.category)} · v${d.version} · ${U.fileSize(d.size)} · ${esc(S.userName(d.uploadedBy))}</span></span><span class="muted">${U.date(d.uploadedAt)}</span>${d.storagePath ? `<button class="btn btn-ghost btn-sm" data-open="${d.id}">⤓</button>` : ""}</div>`).join("") || ui.empty("No files.")) + "</div>" +
         (S.can("create", "document") ? `<div class="row-gap"><button class="btn btn-ghost" onclick="OM.actions.uploadDoc(null,'${c.id}')">+ Upload</button></div>` : "");
+      body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => OM.actions.openAttachment(S.find("document", b.dataset.open).storagePath)));
     } else if (tab === "notes") {
       body.innerHTML = ui.sectionCard("Account notes", `
         <textarea id="cNotes" rows="6" ${S.can("edit", "client", c) ? "" : "disabled"}>${esc(c.notes || "")}</textarea>
