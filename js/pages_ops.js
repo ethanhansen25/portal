@@ -333,9 +333,23 @@
       body.querySelectorAll("[data-review]").forEach((row) => row.addEventListener("click", () => reviewDetailModal(S.find("review", row.dataset.review))));
       body.querySelectorAll("[data-due-user]").forEach((row) => row.addEventListener("click", () => reviewModal(row.dataset.dueUser)));
     } else if (tab === "actions") {
+      const canAdd = S.isExec(S.me()) || S.me().dept === "Human Resources";
       body.innerHTML = ui.sectionCard("Coaching, write-ups & warnings", S.db.hrActions.map((a) => `
         <div class="list-row"><span class="list-icon">${a.type === "writeup" ? "⚠" : "✎"}</span>
-        <span class="list-main"><b>${esc(S.userName(a.userId))} — ${U.cap(a.type)}</b><span class="muted">${esc(a.summary)}</span><span class="muted">Issued by ${esc(S.userName(a.issuedBy))} · ${U.date(a.date)}</span></span>${ui.badge(a.status)}</div>`).join("") || ui.empty("No records."));
+        <span class="list-main"><b>${esc(S.userName(a.userId))} — ${U.cap(a.type)}</b><span class="muted">${esc(a.summary)}</span><span class="muted">Issued by ${esc(S.userName(a.issuedBy))} · ${U.date(a.date)}</span></span>${ui.badge(a.status)}</div>`).join("") || ui.empty("No records."),
+        { action: canAdd ? '<button class="btn btn-gold btn-sm" id="newHrAction">+ Add record</button>' : "" });
+      const na = body.querySelector("#newHrAction");
+      if (na) na.addEventListener("click", () => {
+        const staff = S.db.users.filter((u) => u.status === "active" && u.portalType !== "client").map((u) => [u.id, u.name + " · " + (u.title || u.dept)]);
+        ui.formModal("Add coaching / write-up / warning", [
+          { name: "userId", label: "Employee", type: "select", required: true, options: staff },
+          { name: "type", label: "Type", type: "select", required: true, options: [["coaching", "Coaching"], ["writeup", "Write-up"], ["warning", "Warning"]] },
+          { name: "summary", label: "Summary", type: "textarea", required: true, span2: true },
+        ], (v, close) => {
+          S.create("hrAction", { userId: v.userId, type: v.type, date: Date.now(), issuedBy: S.meId, summary: v.summary, status: "active" }, U.cap(v.type) + " issued — " + S.userName(v.userId));
+          close(); ui.toast("Record added.", "good"); OM.router.refresh();
+        }, { wide: true });
+      });
     }
   };
 
