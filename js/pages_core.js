@@ -218,11 +218,8 @@
       if (am) am.addEventListener("click", () => ui.formModal("Add team member", [
         { name: "userId", label: "Person", type: "user", required: true, filter: (u) => !(p.team || []).includes(u.id) },
       ], (v, close) => {
-        S.assertCan("assign", "project", p);
-        p.team.push(v.userId);
-        S.audit("assign", "project", p.id, "Added " + S.userName(v.userId) + " to " + p.code);
-        S.notify(v.userId, "project", "You were added to " + p.name, "Added by " + S.userName(S.meId), "#/project/" + p.id);
-        S.save(); close(); ui.toast("Team member added.", "good"); OM.router.refresh();
+        S.addTeamMember(p.id, v.userId);
+        close(); ui.toast("Team member added.", "good"); OM.router.refresh();
       }));
     }
 
@@ -363,7 +360,7 @@
             ${deps.length ? `<div class="dep-list"><span class="detail-label">Depends on</span>${deps.map((d) => `<a class="dep-chip ${d.status === "done" ? "done" : ""}" href="#/task/${d.id}">${d.status === "done" ? "✓ " : "⛓ "}${esc(d.title)}</a>`).join("")}</div>` : ""}
             ${canEdit ? `<div class="row-gap status-row">${["todo", "in_progress", "review", "blocked", "done"].map((s2) => `<button class="btn btn-sm ${t.status === s2 ? "btn-gold" : "btn-ghost"}" data-status="${s2}">${U.cap(s2)}</button>`).join("")}</div>` : ""}`)}
           ${ui.sectionCard("Checklist" + ((t.checklist || []).length ? ` (${t.checklist.filter((c) => c.done).length}/${t.checklist.length})` : ""), `
-            ${(t.checklist || []).map((c, i) => `<label class="check-row"><input type="checkbox" data-chk="${i}" ${c.done ? "checked" : ""} ${canEdit ? "" : "disabled"}><span class="${c.done ? "struck" : ""}">${esc(c.text)}</span></label>`).join("") || '<p class="muted">No checklist items.</p>'}
+            ${(t.checklist || []).map((c) => `<label class="check-row"><input type="checkbox" data-chk="${c.id}" ${c.done ? "checked" : ""} ${canEdit ? "" : "disabled"}><span class="${c.done ? "struck" : ""}">${esc(c.text)}</span></label>`).join("") || '<p class="muted">No checklist items.</p>'}
             ${canEdit ? `<div class="inline-add"><input type="text" id="newChk" placeholder="Add checklist item…"><button class="btn btn-ghost btn-sm" id="addChk">Add</button></div>` : ""}`)}
           ${canEdit ? ui.sectionCard("Log time", `<div class="inline-add"><input type="number" id="logHrs" step="0.5" min="0.5" placeholder="Hours"><button class="btn btn-gold btn-sm" id="logBtn">Log time</button></div>
             ${(t.timeEntries || []).slice(-5).reverse().map((te) => `<div class="list-row"><span class="list-main">${esc(S.userName(te.userId))}</span><span class="muted">${U.hrs(te.hours)} · ${U.date(te.date)}</span></div>`).join("")}`) : ""}
@@ -388,38 +385,25 @@
       } catch (e) { ui.toast(e.message, "bad"); }
     }));
     el.querySelectorAll("[data-chk]").forEach((c) => c.addEventListener("change", () => {
-      t.checklist[+c.dataset.chk].done = c.checked;
-      S.save(); OM.router.refresh();
+      S.toggleChecklistItem(c.dataset.chk, c.checked); OM.router.refresh();
     }));
     const addChk = el.querySelector("#addChk");
     if (addChk) addChk.addEventListener("click", () => {
       const v = el.querySelector("#newChk").value.trim();
       if (!v) return;
-      t.checklist = t.checklist || []; t.checklist.push({ text: v, done: false });
-      S.save(); OM.router.refresh();
+      S.addChecklistItem(t.id, v); OM.router.refresh();
     });
     const logBtn = el.querySelector("#logBtn");
     if (logBtn) logBtn.addEventListener("click", () => {
       const h = parseFloat(el.querySelector("#logHrs").value);
       if (!h || h <= 0) return;
-      t.timeEntries = t.timeEntries || []; t.timeEntries.push({ userId: S.meId, hours: h, date: Date.now() });
-      S.audit("edit", "task", t.id, "Logged " + U.hrs(h) + ' on "' + t.title + '"');
-      S.save(); ui.toast("Time logged.", "good"); OM.router.refresh();
+      S.logTime(t.id, h); ui.toast("Time logged.", "good"); OM.router.refresh();
     });
     const addComment = el.querySelector("#addComment");
     if (addComment) addComment.addEventListener("click", () => {
       const v = el.querySelector("#newComment").value.trim();
       if (!v) return;
-      t.comments = t.comments || []; t.comments.push({ userId: S.meId, text: v, ts: Date.now() });
-      S.audit("create", "comm", t.id, 'Commented on task "' + t.title + '"');
-      // @mention notifications
-      (v.match(/@(\w+)/g) || []).forEach((m2) => {
-        const name = m2.slice(1).toLowerCase();
-        const u = S.db.users.find((x) => x.name.toLowerCase().startsWith(name));
-        if (u) S.notify(u.id, "mention", S.userName(S.meId) + " mentioned you", v.slice(0, 100), "#/task/" + t.id);
-      });
-      if (t.assigneeId && t.assigneeId !== S.meId) S.notify(t.assigneeId, "task", "New comment on: " + t.title, v.slice(0, 100), "#/task/" + t.id);
-      S.save(); OM.router.refresh();
+      S.addComment(t.id, v); OM.router.refresh();
     });
     const editBtn = el.querySelector("#editTask");
     if (editBtn) editBtn.addEventListener("click", () => ui.formModal("Edit task", taskFormFields(t), (v, close) => {
@@ -592,12 +576,9 @@
         { name: "notes", label: "Notes", type: "textarea", required: true, span2: true },
         { name: "followUpDays", label: "Follow up in (days)", type: "number", hint: "Leave blank for none" },
       ].filter(Boolean), (v, close) => {
-        const rec = { kind: v.kind, clientId: ctx.clientId || v.clientId || null, leadId: ctx.leadId || null, userId: S.meId, ts: Date.now(), durationSec: v.durationMin ? +v.durationMin * 60 : null, notes: v.notes, outcome: null, followUpAt: v.followUpDays ? Date.now() + (+v.followUpDays) * U.DAY : null };
-        S.assertCan("create", "comm", rec);
-        rec.id = "cm-" + (S.db.counters.cm++);
-        S.db.comms.push(rec);
-        S.audit("create", "comm", rec.id, "Logged " + v.kind + (rec.clientId ? " — " + (S.find("client", rec.clientId) || {}).name : ""));
-        S.save(); close(); ui.toast("Logged.", "good"); draw();
+        const rec = { kind: v.kind, direction: "outbound", clientId: ctx.clientId || v.clientId || null, leadId: ctx.leadId || null, userId: S.meId, ts: Date.now(), durationSec: v.durationMin ? +v.durationMin * 60 : null, notes: v.notes, outcome: null, followUpAt: v.followUpDays ? Date.now() + (+v.followUpDays) * U.DAY : null };
+        S.create("comm", rec, "Logged " + v.kind + (rec.clientId ? " — " + (S.find("client", rec.clientId) || {}).name : ""));
+        close(); ui.toast("Logged.", "good"); draw();
       }));
     }
     draw();

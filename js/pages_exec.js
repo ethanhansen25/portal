@@ -241,9 +241,8 @@
         { name: "body", label: "Note", type: "textarea", required: true, span2: true, rows: 6 },
         { name: "tags", label: "Tags (comma-separated)" },
       ], (v, close) => {
-        S.db.boardNotes.push({ id: S.uid("bn"), title: v.title, body: v.body, authorId: S.meId, ts: Date.now(), tags: (v.tags || "").split(",").map((s) => s.trim()).filter(Boolean) });
-        S.audit("create", "boardNote", "*", "Added board note — " + v.title);
-        S.save(); close(); OM.router.refresh();
+        S.create("boardNote", { title: v.title, body: v.body, authorId: S.meId, ts: Date.now(), tags: (v.tags || "").split(",").map((s) => s.trim()).filter(Boolean) }, "Added board note — " + v.title);
+        close(); OM.router.refresh();
       }, { wide: true }));
     } else {
       body.innerHTML = S.db.initiatives.map((i) => ui.sectionCard(i.quarter + " — " + i.title, `

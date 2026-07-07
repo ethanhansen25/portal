@@ -94,43 +94,65 @@
   const lvl = (role) => (ROLES[role] || { level: 0 }).level;
 
   const S = (OM.store = {
-    db: null,
-    sessionKey: "oakframe.session.v1",
-    dbKey: "oakframe.db.v3",
-
-    load() {
-      let db = null;
-      try { db = JSON.parse(localStorage.getItem(S.dbKey) || "null"); } catch (e) { db = null; }
-      if (!db || db.version !== 3) db = OM.seed();
-      S.db = db;
-      S.save();
-    },
-    save() { try { localStorage.setItem(S.dbKey, JSON.stringify(S.db)); } catch (e) { /* storage full — keep in memory */ } },
-    reset() { localStorage.removeItem(S.dbKey); S.load(); },
-
-    me() { return S.db.users.find((u) => u.id === S.meId) || null; },
+    db: null,          // in-memory cache, hydrated from Supabase on sign-in
     meId: null,
-    signIn(userId) {
-      S.meId = userId;
-      localStorage.setItem(S.sessionKey, userId);
-      S.audit("view", "session", userId, "Signed in", { skipPermission: true });
-    },
-    signOut() {
-      if (S.meId) S.audit("view", "session", S.meId, "Signed out", { skipPermission: true });
-      S.meId = null;
-      localStorage.removeItem(S.sessionKey);
-    },
-    restoreSession() {
-      const id = localStorage.getItem(S.sessionKey);
-      if (id && S.db.users.find((u) => u.id === id)) S.meId = id;
-    },
 
-    user(id) { return S.db.users.find((u) => u.id === id); },
+    /* Populate S.db from Supabase (RLS decides what comes back). Called after
+       auth resolves and again whenever we need a full resync. */
+    async hydrate() {
+      S.db = await OM.db.hydrate();
+      // Lightweight derived counter the invoice screen uses for its next number.
+      const maxInv = (S.db.invoices || []).reduce((m, i) => {
+        const n = parseInt(String(i.number || "").replace(/\D/g, ""), 10);
+        return isNaN(n) ? m : Math.max(m, n);
+      }, 1040);
+      S.db.counters = { inv: maxInv + 1 };
+      return S.db;
+    },
+    // Re-pull a single collection after a mutation whose server effects we
+    // can't fully mirror locally.
+    async resync(...colls) {
+      for (const c of colls) {
+        const entity = Object.keys(OM.ENTITIES).find((k) => OM.ENTITIES[k].coll === c);
+        if (entity) S.db[c] = await OM.db.refreshColl(c);
+      }
+    },
+    save() { /* persistence is now per-mutation against Supabase; no-op kept
+                so the handful of legacy call sites remain harmless */ },
+
+    me() { return (S.db && S.db.users.find((u) => u.id === S.meId)) || null; },
+    meIsExec() { return S.isExec(S.me()); },
+    user(id) { return S.db && S.db.users.find((u) => u.id === id); },
     userName(id) { const u = S.user(id); return u ? u.name : "System"; },
     isExec(u) { return !!(u && ROLES[u.role] && ROLES[u.role].exec); },
-    meIsExec() { return S.isExec(S.me()); },
 
-    uid(prefix) { return prefix + "-" + (S.db.counters.generic++) + Math.random().toString(36).slice(2, 6); },
+    uid() { return (crypto && crypto.randomUUID) ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8); },
+    nextInvoiceNumber() { return "INV-" + (S.db.counters.inv++); },
+
+    /* ---------- AUTH (real Supabase sessions) ---------- */
+    async signUp(email, password, name) {
+      const { data, error } = await OM.db.client.auth.signUp({ email, password, options: { data: { name } } });
+      if (error) throw error;
+      return data; // data.session is null when email confirmation is required
+    },
+    async signInWithPassword(email, password) {
+      const { data, error } = await OM.db.client.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      return data;
+    },
+    async signOut() {
+      try { await OM.db.client.auth.signOut(); } catch (e) { /* ignore */ }
+      S.meId = null; S.db = null;
+    },
+    async currentSession() {
+      const { data } = await OM.db.client.auth.getSession();
+      return data ? data.session : null;
+    },
+    // Stamp presence so "online" indicators are truthful for this user.
+    async touchPresence() {
+      if (!S.meId) return;
+      try { await OM.db.from("profiles").update({ last_active_at: new Date().toISOString() }).eq("id", S.meId); } catch (e) { /* non-fatal */ }
+    },
 
     /* ---------- assignment scope helpers ---------- */
     myProjects(u) {
@@ -338,60 +360,85 @@
       }
     },
 
+    /* ---------- background write helper ----------
+       Every mutation updates the in-memory cache immediately (so the UI feels
+       instant) and pushes the real write to Supabase in the background. If the
+       write is rejected (usually RLS), we surface it and re-pull the affected
+       collections so the screen snaps back to server truth. */
+    _bg(promise, label, resyncColls) {
+      Promise.resolve(promise).catch((e) => {
+        console.error(label, e);
+        if (OM.ui) OM.ui.toast((label || "Save failed") + ": " + (e.message || e), "bad", 6000);
+        if (resyncColls && resyncColls.length) S.resync(...resyncColls).then(() => OM.router && OM.router.refresh()).catch(() => {});
+      });
+    },
+
     /* ---------- AUDIT (append-only) ---------- */
     audit(action, entity, entityId, summary, opts = {}) {
       const u = S.me();
-      S.db.audit.push({
-        id: "au-" + (S.db.counters.au++),
-        ts: Date.now(),
-        userId: u ? u.id : "system",
-        role: u ? u.role : "system",
-        dept: u ? u.dept : "—",
+      const rec = {
+        id: S.uid(), ts: Date.now(),
+        userId: u ? u.id : null, role: u ? u.role : null, dept: u ? u.dept : null,
         action, entity, entityId: entityId || "*", summary,
         prev: opts.prev != null ? opts.prev : null,
         next: opts.next != null ? opts.next : null,
-        ip: (S.db.ipFor && u && S.db.ipFor[u.id]) || "10.4.0.1",
-        ua: navigator.userAgent.includes("Firefox") ? "Firefox / " + navigator.platform : navigator.userAgent.includes("Safari") && !navigator.userAgent.includes("Chrome") ? "Safari / " + navigator.platform : "Chrome / " + (navigator.platform || "web"),
-        reason: opts.reason || null,
-        denied: !!opts.denied,
-      });
-      S.save();
+        ip: null,
+        ua: navigator.userAgent.includes("Firefox") ? "Firefox / " + navigator.platform : (navigator.userAgent.includes("Safari") && !navigator.userAgent.includes("Chrome")) ? "Safari / " + navigator.platform : "Chrome / " + (navigator.platform || "web"),
+        reason: opts.reason || null, denied: !!opts.denied,
+      };
+      if (S.db && S.db.audit) S.db.audit.unshift(rec);   // exec audit page updates at once
+      // append-only ledger write, fire-and-forget (no toast on failure to avoid noise)
+      OM.db.insert("audit", rec).catch((e) => console.warn("audit insert", e.message));
     },
 
     /* ---------- NOTIFICATIONS ---------- */
+    // Cross-user notifications go through the notify_many SECURITY DEFINER RPC
+    // (direct inserts into someone else's feed are revoked in RLS).
     notify(userIds, kind, title, body, link) {
-      (Array.isArray(userIds) ? userIds : [userIds]).forEach((uid) => {
-        if (!uid || uid === S.meId) return;
-        S.db.notifications.push({ id: "n-" + (S.db.counters.n++), userId: uid, kind, title, body, ts: Date.now(), read: false, link: link || "#/" });
-      });
-      S.save();
+      const list = (Array.isArray(userIds) ? userIds : [userIds]).filter((id) => id && id !== S.meId);
+      if (!list.length) return;
+      OM.db.rpc("notify_many", { p_users: list, p_kind: kind, p_title: title, p_body: body, p_link: link || "#/" })
+        .catch((e) => console.warn("notify", e.message));
     },
-    myNotifications() { return S.db.notifications.filter((n) => n.userId === S.meId).sort((a, b) => b.ts - a.ts); },
+    myNotifications() { return (S.db.notifications || []).filter((n) => n.userId === S.meId).sort((a, b) => b.ts - a.ts); },
     unreadCount() { return S.myNotifications().filter((n) => !n.read).length; },
-    markAllRead() { S.myNotifications().forEach((n) => (n.read = true)); S.save(); },
+    markAllRead() {
+      const unread = S.myNotifications().filter((n) => !n.read);
+      unread.forEach((n) => (n.read = true));
+      if (unread.length) S._bg(OM.db.from("notifications").update({ read: true }).eq("user_id", S.meId).eq("read", false), "Mark read", ["notifications"]);
+    },
+    markRead(id) {
+      const n = (S.db.notifications || []).find((x) => x.id === id);
+      if (n && !n.read) { n.read = true; S._bg(OM.db.from("notifications").update({ read: true }).eq("id", id), "Mark read"); }
+    },
 
     execIds() { return S.db.users.filter((u) => S.isExec(u)).map((u) => u.id); },
     deptHeadId(dept) { const u = S.db.users.find((x) => x.role === "dept_head" && x.dept === dept); return u ? u.id : null; },
 
     /* ---------- GENERIC CRUD (permission-gated + audited) ---------- */
-    collections: {
-      lead: "leads", client: "clients", contact: "contacts", project: "projects", task: "tasks",
-      invoice: "invoices", expense: "expenses", equipment: "equipment", approval: "approvals",
-      candidate: "candidates", timeoff: "timeOff", review: "reviews", hrAction: "hrActions",
-      comm: "comms", meeting: "meetings", resource: "resources", document: "documents",
-      initiative: "initiatives", risk: "risks", boardNote: "boardNotes", commission: "commissions",
-      payroll: "payroll", budget: "budgets", user: "users",
-    },
-    coll(entity) { return S.db[S.collections[entity]]; },
+    coll(entity) { const def = OM.ENTITIES[entity]; return def ? S.db[def.coll] : null; },
     find(entity, id) { return (S.coll(entity) || []).find((r) => r.id === id); },
+
+    // child-table writers used when a parent is created with nested rows
+    async _writeChildren(entity, data) {
+      if (entity === "project" && (data.team || []).length) {
+        await OM.db.from("project_team").insert(data.team.map((uid) => ({ project_id: data.id, user_id: uid })));
+      } else if (entity === "meeting" && Array.isArray(data.attendees)) {
+        await OM.db.from("meeting_attendees").insert(data.attendees.map((uid) => ({ meeting_id: data.id, user_id: uid })));
+      } else if (entity === "invoice" && (data.items || []).length) {
+        await OM.db.from("invoice_items").insert(data.items.map((it) => ({ invoice_id: data.id, description: it.desc, qty: it.qty, rate: it.rate })));
+      } else if (entity === "initiative" && (data.keyResults || []).length) {
+        await OM.db.from("key_results").insert(data.keyResults.map((k) => ({ initiative_id: data.id, text: k.text, done: k.done || 0, target: k.target || 1 })));
+      }
+    },
 
     create(entity, data, summary) {
       S.assertCan("create", entity, data);
-      if (!data.id) data.id = S.uid(entity.slice(0, 2));
-      data.createdAt = data.createdAt || Date.now();
-      S.coll(entity).push(data);
+      if (!data.id) data.id = S.uid();
+      if (data.createdAt == null) data.createdAt = Date.now();
+      S.coll(entity).push(data);            // optimistic
       S.audit("create", entity, data.id, summary || ("Created " + entity + " — " + (data.name || data.title || data.id)), { next: data.name || data.title || null });
-      S.save();
+      S._bg((async () => { await OM.db.insert(entity, data); await S._writeChildren(entity, data); })(), "Create " + entity, [OM.ENTITIES[entity].coll]);
       return data;
     },
     update(entity, id, patch, summary, reason) {
@@ -400,11 +447,11 @@
       S.assertCan("edit", entity, rec);
       const prevSnapshot = {};
       Object.keys(patch).forEach((k) => (prevSnapshot[k] = rec[k]));
-      Object.assign(rec, patch);
+      Object.assign(rec, patch);            // optimistic
       S.audit("edit", entity, id, summary || ("Updated " + entity + " — " + (rec.name || rec.title || id)), {
         prev: JSON.stringify(prevSnapshot).slice(0, 400), next: JSON.stringify(patch).slice(0, 400), reason,
       });
-      S.save();
+      S._bg(OM.db.patch(entity, id, patch), "Update " + entity, [OM.ENTITIES[entity].coll]);
       return rec;
     },
     remove(entity, id, reason) {
@@ -413,27 +460,69 @@
       S.assertCan("delete", entity, rec);
       if (!reason) { const err = new Error("A reason is required to delete records."); err.needsReason = true; throw err; }
       const arr = S.coll(entity);
-      arr.splice(arr.indexOf(rec), 1);
+      arr.splice(arr.indexOf(rec), 1);      // optimistic
       S.audit("delete", entity, id, "Deleted " + entity + " — " + (rec.name || rec.title || id), { prev: JSON.stringify(rec).slice(0, 500), reason });
-      S.save();
+      S._bg(OM.db.del(entity, id), "Delete " + entity, [OM.ENTITIES[entity].coll]);
+    },
+
+    /* ---------- nested-write helpers (child tables) ---------- */
+    addChecklistItem(taskId, text) {
+      const t = S.find("task", taskId); if (!t) return;
+      const item = { id: S.uid(), text, done: false, position: (t.checklist || []).length };
+      t.checklist = t.checklist || []; t.checklist.push(item);
+      S._bg(OM.db.from("task_checklist_items").insert({ id: item.id, task_id: taskId, text, done: false, position: item.position }), "Add checklist item", ["tasks"]);
+    },
+    toggleChecklistItem(itemId, done) {
+      let host = null;
+      (S.db.tasks || []).forEach((t) => (t.checklist || []).forEach((c) => { if (c.id === itemId) { c.done = done; host = t; } }));
+      S._bg(OM.db.from("task_checklist_items").update({ done }).eq("id", itemId), "Update checklist", ["tasks"]);
+    },
+    logTime(taskId, hours) {
+      const t = S.find("task", taskId); if (!t) return;
+      const entry = { id: S.uid(), userId: S.meId, hours, date: Date.now() };
+      t.timeEntries = t.timeEntries || []; t.timeEntries.push(entry);
+      S.audit("edit", "task", taskId, "Logged " + U.hrs(hours) + ' on "' + t.title + '"');
+      S._bg(OM.db.from("task_time_entries").insert({ id: entry.id, task_id: taskId, user_id: S.meId, hours, entry_date: new Date().toISOString().slice(0, 10) }), "Log time", ["tasks"]);
+    },
+    addComment(taskId, text) {
+      const t = S.find("task", taskId); if (!t) return;
+      const c = { id: S.uid(), userId: S.meId, text, ts: Date.now() };
+      t.comments = t.comments || []; t.comments.push(c);
+      S.audit("create", "comm", taskId, 'Commented on task "' + t.title + '"');
+      (text.match(/@(\w+)/g) || []).forEach((m) => {
+        const u = S.db.users.find((x) => x.name.toLowerCase().startsWith(m.slice(1).toLowerCase()));
+        if (u) S.notify(u.id, "mention", S.userName(S.meId) + " mentioned you", text.slice(0, 100), "#/task/" + taskId);
+      });
+      if (t.assigneeId && t.assigneeId !== S.meId) S.notify(t.assigneeId, "task", "New comment on: " + t.title, text.slice(0, 100), "#/task/" + taskId);
+      S._bg(OM.db.from("task_comments").insert({ id: c.id, task_id: taskId, user_id: S.meId, body: text }), "Comment", ["tasks"]);
+    },
+    addTeamMember(projectId, userId) {
+      const p = S.find("project", projectId); if (!p) return;
+      S.assertCan("assign", "project", p);
+      p.team = p.team || []; if (!p.team.includes(userId)) p.team.push(userId);
+      S.audit("assign", "project", projectId, "Added " + S.userName(userId) + " to " + p.code);
+      S.notify(userId, "project", "You were added to " + p.name, "Added by " + S.userName(S.meId), "#/project/" + projectId);
+      S._bg(OM.db.from("project_team").insert({ project_id: projectId, user_id: userId }), "Add team member", ["projects"]);
     },
 
     /* ---------- DOMAIN ACTIONS ---------- */
     logCall(data) {
       S.assertCan("create", "comm", data);
-      const rec = Object.assign({ id: "cm-" + (S.db.counters.cm++), kind: "call", direction: "outbound", userId: S.meId, ts: Date.now() }, data);
-      S.db.comms.push(rec);
+      const rec = Object.assign({ id: S.uid(), kind: "call", direction: "outbound", userId: S.meId, ts: Date.now() }, data);
+      S.db.comms.push(rec);                 // optimistic
       const lead = rec.leadId && S.find("lead", rec.leadId);
+      let leadPatch = null;
       if (lead) {
         lead.lastActivity = Date.now();
         lead.touches = (lead.touches || 0) + 1;
         if (rec.outcome === "meeting_set" && ["new", "contacted", "interested"].includes(lead.stage)) lead.stage = "meeting";
         else if (["connected", "callback"].includes(rec.outcome) && lead.stage === "new") lead.stage = "contacted";
         else if (rec.outcome === "not_interested") lead.stage = lead.stage === "won" ? lead.stage : "lost";
+        leadPatch = { lastActivity: lead.lastActivity, touches: lead.touches, stage: lead.stage };
       }
       S.audit("create", "comm", rec.id, "Logged " + rec.kind + (lead ? " — " + lead.company : "") + " (" + (rec.outcome || "note") + ")");
-      if (rec.outcome === "meeting_set") S.notify([S.deptHeadId("Sales"), "u-cso"], "sales", "Meeting booked: " + (lead ? lead.company : ""), S.userName(S.meId) + " set a meeting.", "#/sales/pipeline");
-      S.save();
+      if (rec.outcome === "meeting_set") S.notify(S.execIds().concat(S.deptHeadId("Sales")), "sales", "Meeting booked: " + (lead ? lead.company : "a lead"), S.userName(S.meId) + " set a meeting.", "#/sales/pipeline");
+      S._bg((async () => { await OM.db.insert("comm", rec); if (leadPatch) await OM.db.patch("lead", lead.id, leadPatch); })(), "Log call", ["comms", "leads"]);
       return rec;
     },
 
@@ -447,9 +536,12 @@
       if (stage === "won") {
         S.notify(S.execIds().concat(S.deptHeadId("Sales")), "sales", "Deal won — " + lead.company + " (" + U.money(lead.value) + ")", "Closed by " + S.userName(lead.assignedTo) + ".", "#/sales/pipeline");
       }
-      S.save();
+      S._bg(OM.db.patch("lead", leadId, { stage, lastActivity: lead.lastActivity }), "Move lead", ["leads"]);
     },
 
+    // The multi-approver chain + ripple effects run server-side in the
+    // decide_approval() RPC so they stay atomic and can't be spoofed. We show
+    // an optimistic result, then resync from the authoritative outcome.
     decideApproval(apId, decision, note) {
       const ap = S.find("approval", apId);
       S.assertCan("approve", "approval", ap);
@@ -457,37 +549,65 @@
       ap.decisions.push({ userId: S.meId, decision, ts: Date.now(), note: note || null });
       const needsCeo = (ap.approverRoles || []).includes("ceo");
       const stillNeedsCeo = needsCeo && !ap.decisions.some((d) => { const u = S.user(d.userId); return u && (u.role === "ceo" || u.role === "owner"); });
-      if (decision === "rejected") ap.status = "rejected";
-      else if (!stillNeedsCeo) ap.status = "approved";
-      S.audit("approve", "approval", apId, (decision === "approved" ? "Approved" : "Rejected") + " — " + ap.title, { next: decision, reason: note });
-      S.notify(ap.requestedBy, "approval", "Approval " + (ap.status === "pending" ? "advanced" : ap.status) + ": " + ap.title, (note ? "Note: " + note : "Decision recorded by " + S.userName(S.meId)), "#/approvals");
-      // Ripple effects
-      if (ap.status === "approved") {
-        if (ap.refType === "expense" && ap.refId) { const e = S.find("expense", ap.refId); if (e) e.status = "approved"; }
-        if (ap.refType === "timeoff" && ap.refId) { const t = S.find("timeoff", ap.refId); if (t) t.status = "approved"; }
-        if (ap.refType === "invoice" && ap.refId) { const i = S.find("invoice", ap.refId); if (i && i.status === "draft") i.status = "sent"; }
-      }
-      if (ap.status === "rejected" && ap.refType === "timeoff" && ap.refId) { const t = S.find("timeoff", ap.refId); if (t) t.status = "denied"; }
-      S.save();
+      if (decision === "rejected") ap.status = "rejected"; else if (!stillNeedsCeo) ap.status = "approved";
+      S._bg((async () => {
+        await OM.db.rpc("decide_approval", { p_approval_id: apId, p_decision: decision, p_note: note || null });
+        await S.resync("approvals", "expenses", "timeOff", "invoices", "notifications");
+        if (OM.router) OM.router.refresh();
+      })(), "Decide approval", ["approvals"]);
       return ap;
+    },
+
+    // HR/exec place a member into their role, department, title, and status.
+    // The profiles UPDATE policy + enforce_profile_update trigger enforce this
+    // server-side; this is the client affordance + audit trail.
+    updateProfile(userId, patch, summary) {
+      const me = S.me();
+      if (!(S.isExec(me) || me.dept === "Human Resources")) throw new Error("Only HR or an executive can edit team members.");
+      const u = S.user(userId); if (!u) throw new Error("Member not found.");
+      const prev = { role: u.role, dept: u.dept, title: u.title, status: u.status };
+      Object.assign(u, patch);
+      S.audit("manage", "employee", userId, summary || ("Updated member — " + u.name), { prev: JSON.stringify(prev).slice(0, 300), next: JSON.stringify(patch).slice(0, 300) });
+      if (patch.role || patch.dept) S.notify(userId, "hr", "Your access was updated", "You're now " + OM.ROLES[u.role].label + " in " + u.dept + ".", "#/settings");
+      S._bg(OM.db.patch("user", userId, patch), "Update member", ["users"]);
+      return u;
+    },
+    // Compensation is Finance/exec only and lives in its own table.
+    setCompensation(userId, salary, rate) {
+      const me = S.me();
+      if (!(S.isExec(me) || me.dept === "Finance")) throw new Error("Only Finance or an executive can set compensation.");
+      const u = S.user(userId); if (u) { u.salary = salary != null ? salary : u.salary; u.rate = rate != null ? rate : u.rate; }
+      S.audit("manage", "compensation", userId, "Updated compensation — " + (u ? u.name : userId));
+      S._bg(OM.db.from("compensation").upsert({ profile_id: userId, salary: salary != null ? salary : null, hourly_rate: rate != null ? rate : null }), "Set compensation", ["users"]);
+    },
+
+    decideTimeOff(id, status) {
+      const t = S.find("timeoff", id);
+      S.assertCan("approve", "timeoff", t);
+      t.status = status;
+      S.audit("approve", "timeoff", id, (status === "approved" ? "Approved" : "Denied") + " time off — " + S.userName(t.userId) + " (" + t.days + "d)");
+      S.notify(t.userId, "hr", "Time off " + status, status === "approved" ? U.date(t.start) + " → " + U.date(t.end) : "Talk to your manager for details.", "#/settings");
+      S._bg(OM.db.patch("timeoff", id, { status }), "Decide time off", ["timeOff"]);
     },
 
     checkoutEquipment(eqId, projectId) {
       const eq = S.find("equipment", eqId);
       S.assertCan("checkout", "equipment", eq);
       if (eq.status !== "available") throw new Error("This item is not available.");
-      Object.assign(eq, { status: "checked_out", assignedTo: S.meId, projectId: projectId || null, location: "Field — " + S.userName(S.meId) });
+      const patch = { status: "checked_out", assignedTo: S.meId, projectId: projectId || null, location: "Field — " + S.userName(S.meId) };
+      Object.assign(eq, patch);
       S.audit("edit", "equipment", eqId, "Checked out " + eq.name + " (" + eq.assetTag + ")", { next: "checked_out" });
-      S.save();
+      S._bg(OM.db.patch("equipment", eqId, patch), "Check out", ["equipment"]);
     },
     checkinEquipment(eqId, condition, note) {
       const eq = S.find("equipment", eqId);
       S.assertCan("checkin", "equipment", eq);
       const prevUser = eq.assignedTo;
-      Object.assign(eq, { status: condition === "damaged" ? "damaged" : "available", assignedTo: null, projectId: null, condition: condition || eq.condition, location: "Studio A cage", note: note || eq.note });
+      const patch = { status: condition === "damaged" ? "damaged" : "available", assignedTo: null, projectId: null, condition: condition || eq.condition, location: "Studio A cage", note: note || eq.note };
+      Object.assign(eq, patch);
       S.audit("edit", "equipment", eqId, "Checked in " + eq.name + (condition === "damaged" ? " — DAMAGED: " + (note || "") : ""), { prev: prevUser, next: eq.status });
-      if (condition === "damaged") S.notify([S.deptHeadId("Technology"), "u-coo"], "equipment", "Damage reported: " + eq.name, note || "Inspect and file a damage report.", "#/equipment");
-      S.save();
+      if (condition === "damaged") S.notify([S.deptHeadId("Technology")].concat(S.execIds()), "equipment", "Damage reported: " + eq.name, note || "Inspect and file a damage report.", "#/equipment");
+      S._bg(OM.db.patch("equipment", eqId, patch), "Check in", ["equipment"]);
     },
   });
 

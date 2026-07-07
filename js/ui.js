@@ -258,8 +258,15 @@
   function sectionCard(title, bodyHtml, opts = {}) {
     return `<div class="card ${opts.cls || ""}"><div class="card-head"><h3>${esc(title)}</h3>${opts.action || ""}</div><div class="card-body">${bodyHtml}</div></div>`;
   }
-  function empty(msg, icon = "◇") {
-    return `<div class="empty-block"><div class="empty-icon">${icon}</div><p>${esc(msg)}</p></div>`;
+  // empty(message, icon, actionsHtml?) — professional empty state with a
+  // framed glyph, an explanation, and optional quick-action buttons.
+  function empty(msg, icon = "◇", actions) {
+    return `<div class="empty-block"><div class="empty-illus">${icon}</div><p>${esc(msg)}</p>${actions ? `<div class="empty-cta">${actions}</div>` : ""}</div>`;
+  }
+  // Skeleton placeholder rows/tiles for loading states.
+  function skeleton(kind = "rows", n = 5) {
+    if (kind === "kpi") return `<div class="kpi-grid">${Array.from({ length: n }, () => '<div class="card skeleton sk-kpi"></div>').join("")}</div>`;
+    return `<div class="card">${Array.from({ length: n }, () => '<div class="skeleton sk-row"></div>').join("")}</div>`;
   }
   function pageHead(title, sub, actions) {
     return `<div class="page-head"><div><h1 class="page-title">${title}</h1>${sub ? `<p class="page-sub">${sub}</p>` : ""}</div><div class="page-actions">${actions || ""}</div></div>`;
@@ -280,5 +287,5 @@
 
   const KIND_ICONS = { call: "☎", email: "✉", meeting: "◫", sms: "▤", voice_note: "♪", note: "✎", task: "☑", approval: "✓", finance: "$", sales: "▲", project: "▣", hr: "☺", equipment: "⚙", mention: "@", deadline: "⏱" };
 
-  OM.ui = { badge, avatar, userCell, kpi, table, modal, form, formValues, formModal, confirmModal, toast, tabs, kanban, sectionCard, empty, pageHead, timeline, KIND_ICONS, STATUS_TONES };
+  OM.ui = { badge, avatar, userCell, kpi, table, modal, form, formValues, formModal, confirmModal, toast, tabs, kanban, sectionCard, empty, skeleton, pageHead, timeline, KIND_ICONS, STATUS_TONES };
 })();

@@ -102,12 +102,15 @@
   /* ---------------- SHELL ---------------- */
   function renderShell() {
     const me = S.me();
+    const railed = localStorage.getItem("om.rail") === "1";
+    document.body.className = "";
     document.body.innerHTML = `
-      <div class="shell">
+      <div class="shell ${railed ? "rail" : ""}" id="shell">
         <aside class="sidebar" id="sidebar">
-          <div class="brand" onclick="location.hash='#/'">
-            <div class="brand-mark">O</div>
-            <div class="brand-text"><b>Oakframe</b><span>Media OS</span></div>
+          <div class="brand">
+            <div class="brand-mark" onclick="location.hash='#/'">O</div>
+            <div class="brand-text" onclick="location.hash='#/'"><b>Oakframe</b><span>Media OS</span></div>
+            <button class="sb-collapse" id="sbCollapse" title="Collapse sidebar">${railed ? "›" : "‹"}</button>
           </div>
           <nav class="nav" id="nav"></nav>
           <div class="sidebar-foot">
@@ -121,7 +124,7 @@
           <header class="topbar">
             <button class="icon-btn burger" id="burger">☰</button>
             <div class="global-search">
-              <input type="text" id="gSearch" placeholder="Search people, clients, projects, leads, documents…  ( / )" autocomplete="off">
+              <input type="text" id="gSearch" placeholder="Search people, clients, projects, leads, documents…" autocomplete="off"><span class="gs-kbd">⌘K</span>
               <div class="gs-results" id="gsResults"></div>
             </div>
             <button class="icon-btn bell" id="bellBtn" title="Notifications">◉<span class="bell-count" id="bellCount"></span></button>
@@ -131,7 +134,6 @@
                 <div class="um-head"><b>${esc(me.name)}</b><span class="muted">${esc(me.title)}</span></div>
                 <a href="#/settings">Profile & settings</a>
                 <a href="#/notifications">Notifications</a>
-                <button id="switchUser">Switch user (demo)</button>
                 <button id="signOut">Sign out</button>
               </div>
             </div>
@@ -167,33 +169,124 @@
     const menu = document.getElementById("userMenu");
     userBtn.addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("open"); });
     document.addEventListener("click", () => menu.classList.remove("open"));
-    document.getElementById("signOut").addEventListener("click", () => { S.signOut(); boot(); });
-    document.getElementById("switchUser").addEventListener("click", () => { S.signOut(); boot(); });
+    document.getElementById("signOut").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; renderLogin(); });
     document.getElementById("meChip").addEventListener("click", () => (location.hash = "#/settings"));
+    document.getElementById("sbCollapse").addEventListener("click", () => {
+      const shell = document.getElementById("shell");
+      const railed = shell.classList.toggle("rail");
+      localStorage.setItem("om.rail", railed ? "1" : "0");
+      document.getElementById("sbCollapse").textContent = railed ? "›" : "‹";
+    });
 
     // Global search
     const gs = document.getElementById("gSearch");
     const gr = document.getElementById("gsResults");
     document.addEventListener("keydown", (e) => {
-      if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); gs.focus(); }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openCmdK(); return; }
+      if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); openCmdK(); }
       if (e.key === "Escape") { gr.classList.remove("open"); gs.blur(); }
     });
-    gs.addEventListener("input", () => {
-      const q = gs.value.trim().toLowerCase();
-      if (q.length < 2) { gr.classList.remove("open"); return; }
-      const hits = [];
-      const push = (icon, label, sub, link) => hits.length < 12 && hits.push({ icon, label, sub, link });
-      S.db.users.filter((u) => u.name.toLowerCase().includes(q)).slice(0, 3).forEach((u) => push("☺", u.name, u.title + " · " + u.dept, "#/directory"));
-      S.db.clients.filter((c) => S.can("view", "client", c) && c.name.toLowerCase().includes(q)).slice(0, 3).forEach((c) => push("◇", c.name, "Client · " + c.industry, "#/client/" + c.id));
-      S.db.projects.filter((p) => (p.name + p.code).toLowerCase().includes(q)).slice(0, 3).forEach((p) => push("▣", p.name, p.code, "#/project/" + p.id));
-      S.db.leads.filter((l) => S.can("view", "lead", l) && l.company.toLowerCase().includes(q)).slice(0, 3).forEach((l) => push("▲", l.company, "Lead · " + U.cap(l.stage), "#/lead/" + l.id));
-      S.db.tasks.filter((t) => S.can("view", "task", t) && t.title.toLowerCase().includes(q)).slice(0, 3).forEach((t) => push("☑", t.title, "Task", "#/task/" + t.id));
-      S.db.documents.filter((d) => S.can("view", "document", d) && d.name.toLowerCase().includes(q)).slice(0, 2).forEach((d) => push("▦", d.name, "Document · " + d.category, "#/documents"));
-      S.db.resources.filter((r) => S.can("view", "resource", r) && r.name.toLowerCase().includes(q)).slice(0, 2).forEach((r) => push("▤", r.name, "Resource · " + r.category, "#/resources"));
-      gr.innerHTML = hits.map((h) => `<a class="gs-hit" href="${h.link}"><span class="list-icon">${h.icon}</span><span class="list-main"><b>${esc(h.label)}</b><span class="muted">${esc(h.sub)}</span></span></a>`).join("") || '<div class="gs-empty">No matches you have access to.</div>';
-      gr.classList.add("open");
+    // The topbar field is the entry point to the command palette.
+    gs.addEventListener("focus", () => { gs.blur(); openCmdK(); });
+    gs.addEventListener("click", () => openCmdK());
+    if (gr) gr.remove();
+  }
+
+  /* ---------------- SEARCH ---------------- */
+  // Shared by the ⌘K palette. Returns access-filtered, grouped results.
+  function searchEntities(q) {
+    q = q.toLowerCase();
+    const groups = [];
+    const add = (label, items) => { if (items.length) groups.push({ label, items }); };
+    add("Clients", S.db.clients.filter((c) => S.can("view", "client", c) && c.name.toLowerCase().includes(q)).slice(0, 5).map((c) => ({ icon: "◇", label: c.name, sub: "Client · " + (c.industry || ""), link: "#/client/" + c.id })));
+    add("Projects", S.db.projects.filter((p) => ((p.name || "") + (p.code || "")).toLowerCase().includes(q)).slice(0, 5).map((p) => ({ icon: "▣", label: p.name, sub: p.code, link: "#/project/" + p.id })));
+    add("Leads", S.db.leads.filter((l) => S.can("view", "lead", l) && (l.company || "").toLowerCase().includes(q)).slice(0, 5).map((l) => ({ icon: "▲", label: l.company, sub: "Lead · " + U.cap(l.stage), link: "#/lead/" + l.id })));
+    add("Tasks", S.db.tasks.filter((t) => S.can("view", "task", t) && (t.title || "").toLowerCase().includes(q)).slice(0, 5).map((t) => ({ icon: "☑", label: t.title, sub: "Task", link: "#/task/" + t.id })));
+    add("People", S.db.users.filter((u) => (u.name || "").toLowerCase().includes(q)).slice(0, 5).map((u) => ({ icon: "☺", label: u.name, sub: (u.title || "") + " · " + u.dept, link: "#/directory" })));
+    add("Documents", S.db.documents.filter((d) => S.can("view", "document", d) && (d.name || "").toLowerCase().includes(q)).slice(0, 4).map((d) => ({ icon: "▦", label: d.name, sub: "Document · " + d.category, link: "#/documents" })));
+    add("Library", S.db.resources.filter((r) => S.can("view", "resource", r) && (r.name || "").toLowerCase().includes(q)).slice(0, 4).map((r) => ({ icon: "▤", label: r.name, sub: "Resource · " + r.category, link: "#/resources" })));
+    return groups;
+  }
+
+  function navCommands() {
+    return navSections().flatMap((sec) => sec.items.map((it) => ({ icon: it.icon, label: it.label, sub: sec.label, link: it.hash })));
+  }
+
+  /* ---------------- ⌘K COMMAND PALETTE ---------------- */
+  function openCmdK() {
+    if (document.querySelector(".cmdk-overlay")) return;
+    const overlay = document.createElement("div");
+    overlay.className = "cmdk-overlay";
+    overlay.innerHTML = `<div class="cmdk">
+      <div class="cmdk-input-row">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="text" id="cmdkInput" placeholder="Search or jump to…" autocomplete="off">
+        <span class="cmdk-hint">esc</span>
+      </div>
+      <div class="cmdk-results" id="cmdkResults"></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("open"));
+    const input = overlay.querySelector("#cmdkInput");
+    const results = overlay.querySelector("#cmdkResults");
+    let flat = [], active = 0;
+
+    function draw() {
+      const q = input.value.trim();
+      let groups;
+      if (!q) {
+        const rec = recents();
+        groups = [];
+        if (rec.length) groups.push({ label: "Recently viewed", items: rec });
+        groups.push({ label: "Go to", items: navCommands().slice(0, 8) });
+      } else {
+        groups = searchEntities(q);
+        const navHits = navCommands().filter((c) => c.label.toLowerCase().includes(q.toLowerCase()));
+        if (navHits.length) groups.push({ label: "Navigate", items: navHits.slice(0, 5) });
+      }
+      flat = []; active = 0;
+      results.innerHTML = groups.length ? groups.map((g) => `
+        <div class="cmdk-group-label">${esc(g.label)}</div>
+        ${g.items.map((it) => { const idx = flat.push(it) - 1; return `<div class="cmdk-item" data-idx="${idx}"><span class="list-icon">${it.icon}</span><span class="list-main"><b>${esc(it.label)}</b><span class="cmdk-sub">${esc(it.sub || "")}</span></span></div>`; }).join("")}
+      `).join("") : `<div class="cmdk-empty">No matches you have access to.</div>`;
+      highlight();
+    }
+    function highlight() {
+      results.querySelectorAll(".cmdk-item").forEach((el, i) => el.classList.toggle("active", i === active));
+      const el = results.querySelector(".cmdk-item.active");
+      if (el) el.scrollIntoView({ block: "nearest" });
+    }
+    function go(i) { const it = flat[i]; if (it) { close(); location.hash = it.link; } }
+    function close() { overlay.classList.remove("open"); setTimeout(() => overlay.remove(), 150); }
+
+    input.addEventListener("input", draw);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); active = Math.min(active + 1, flat.length - 1); highlight(); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); active = Math.max(active - 1, 0); highlight(); }
+      else if (e.key === "Enter") { e.preventDefault(); go(active); }
+      else if (e.key === "Escape") { close(); }
     });
-    gs.addEventListener("blur", () => setTimeout(() => gr.classList.remove("open"), 180));
+    results.addEventListener("click", (e) => { const el = e.target.closest(".cmdk-item"); if (el) go(+el.dataset.idx); });
+    overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) close(); });
+    draw();
+    input.focus();
+  }
+
+  /* ---------------- RECENTLY VIEWED ---------------- */
+  const RECENT_KEY = "om.recent";
+  function recents() { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); } catch (e) { return []; } }
+  function pushRecent(item) {
+    let list = recents().filter((r) => r.link !== item.link);
+    list.unshift(item);
+    list = list.slice(0, 6);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+  }
+  function recordRecent(hash) {
+    const m = (re, fn) => { const g = hash.match(re); if (g) { const it = fn(g); if (it) pushRecent(it); return true; } return false; };
+    if (m(/^#\/client\/([\w-]+)/, (g) => { const c = S.find("client", g[1]); return c && { icon: "◇", label: c.name, sub: "Client", link: "#/client/" + c.id }; })) return;
+    if (m(/^#\/project\/([\w-]+)/, (g) => { const p = S.find("project", g[1]); return p && { icon: "▣", label: p.name, sub: p.code, link: "#/project/" + p.id }; })) return;
+    if (m(/^#\/lead\/([\w-]+)/, (g) => { const l = S.find("lead", g[1]); return l && { icon: "▲", label: l.company, sub: "Lead", link: "#/lead/" + l.id }; })) return;
+    if (m(/^#\/task\/([\w-]+)/, (g) => { const t = S.find("task", g[1]); return t && { icon: "☑", label: t.title, sub: "Task", link: "#/task/" + t.id }; })) return;
   }
 
   /* ---------------- ROUTER ---------------- */
@@ -208,53 +301,147 @@
         if (m) { try { fn(content, m); } catch (e) { content.innerHTML = ui.empty(e.message, "⚠"); console.error(e); } matched = true; break; }
       }
       if (!matched) content.innerHTML = ui.empty("Page not found.", "◇");
+      try { recordRecent(hash); } catch (e) { /* ignore */ }
       renderNav();
-      document.getElementById("sidebar").classList.remove("open");
+      const sb = document.getElementById("sidebar"); if (sb) sb.classList.remove("open");
       content.scrollTop = 0;
     },
     refresh() { router.render(); },
   });
   window.addEventListener("hashchange", () => { if (S.meId) router.render(); });
 
-  /* ---------------- LOGIN ---------------- */
+  /* ---------------- AUTH SCREEN ---------------- */
+  let authMode = "signin"; // or "signup"
   function renderLogin() {
-    const depts = [...new Set(S.db.users.map((u) => u.dept))];
+    document.body.className = "auth-body";
     document.body.innerHTML = `
-      <div class="login">
-        <div class="login-panel">
-          <div class="login-brand"><div class="brand-mark xl">O</div><h1>Oakframe <span>Media OS</span></h1>
-          <p class="login-sub">The company, in one place. Sign in to your workspace.</p></div>
-          <div class="login-note">Demo workspace — pick a person to experience their exact permissions. Every role sees a different company.</div>
-          ${depts.map((d) => `
-            <div class="login-dept">
-              <h4>${esc(d)}</h4>
-              <div class="login-grid">
-                ${S.db.users.filter((u) => u.dept === d && u.status === "active").map((u) => `
-                  <button class="login-card" data-u="${u.id}">
-                    ${ui.avatar(u)}
-                    <span class="li-info"><b>${esc(u.name)}</b><span>${esc(u.title)}</span></span>
-                    <span class="badge tone-${OM.ROLES[u.role].exec ? "warn" : "neutral"}">${OM.ROLES[u.role].label}</span>
-                  </button>`).join("")}
+      <div class="auth">
+        <div class="auth-aside">
+          <div class="auth-brand"><div class="brand-mark xl">O</div><span>Oakframe Media</span></div>
+          <div class="auth-pitch">
+            <h1>The operating system<br>for how we work.</h1>
+            <p>Projects, clients, sales, finance, people, and equipment — the entire studio in one calm, precise place.</p>
+          </div>
+          <div class="auth-foot">Oakframe Media · Internal systems</div>
+        </div>
+        <div class="auth-main">
+          <div class="auth-card">
+            <div class="auth-head">
+              <h2 id="authTitle">${authMode === "signin" ? "Welcome back" : "Create your account"}</h2>
+              <p id="authSub" class="muted">${authMode === "signin" ? "Sign in to continue to your workspace." : "The first account created becomes the owner."}</p>
+            </div>
+            <form class="auth-form" id="authForm">
+              <div class="field" id="nameField" style="${authMode === "signin" ? "display:none" : ""}">
+                <input type="text" id="authName" placeholder=" " autocomplete="name">
+                <label>Full name</label>
               </div>
-            </div>`).join("")}
+              <div class="field">
+                <input type="email" id="authEmail" placeholder=" " autocomplete="email" required>
+                <label>Work email</label>
+              </div>
+              <div class="field">
+                <input type="password" id="authPassword" placeholder=" " autocomplete="${authMode === "signin" ? "current-password" : "new-password"}" required>
+                <label>Password</label>
+              </div>
+              <div class="auth-error" id="authError"></div>
+              <button type="submit" class="btn btn-gold btn-lg btn-block" id="authSubmit">${authMode === "signin" ? "Sign in" : "Create account"}</button>
+            </form>
+            <div class="auth-switch">
+              ${authMode === "signin"
+                ? `New to Oakframe? <button class="link-btn" id="toSignup">Create an account</button>`
+                : `Already have an account? <button class="link-btn" id="toSignin">Sign in</button>`}
+            </div>
+          </div>
         </div>
       </div>`;
-    document.querySelectorAll(".login-card").forEach((b) => b.addEventListener("click", () => {
-      S.signIn(b.dataset.u);
-      location.hash = "#/";
+
+    const err = document.getElementById("authError");
+    const swap = (mode) => { authMode = mode; renderLogin(); setTimeout(() => { const f = document.getElementById(authMode === "signup" ? "authName" : "authEmail"); if (f) f.focus(); }, 20); };
+    const toSignup = document.getElementById("toSignup"); if (toSignup) toSignup.addEventListener("click", () => swap("signup"));
+    const toSignin = document.getElementById("toSignin"); if (toSignin) toSignin.addEventListener("click", () => swap("signin"));
+
+    document.getElementById("authForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.textContent = "";
+      const email = document.getElementById("authEmail").value.trim();
+      const password = document.getElementById("authPassword").value;
+      const name = (document.getElementById("authName").value || "").trim();
+      const submit = document.getElementById("authSubmit");
+      submit.disabled = true;
+      submit.textContent = authMode === "signin" ? "Signing in…" : "Creating account…";
+      try {
+        if (!OM.db.init()) throw new Error("Backend not configured. Add your Supabase URL and key to js/config.js.");
+        if (authMode === "signup") {
+          if (!name) throw new Error("Please enter your name.");
+          const res = await S.signUp(email, password, name);
+          if (!res.session) {
+            err.classList.add("info");
+            err.textContent = "Account created. Check your email to confirm, then sign in.";
+            authMode = "signin";
+            submit.disabled = false;
+            return;
+          }
+        } else {
+          await S.signInWithPassword(email, password);
+        }
+        await enterApp();
+      } catch (ex) {
+        err.classList.remove("info");
+        err.textContent = friendlyAuthError(ex.message || String(ex));
+        submit.disabled = false;
+        submit.textContent = authMode === "signin" ? "Sign in" : "Create account";
+      }
+    });
+  }
+
+  function friendlyAuthError(msg) {
+    if (/Invalid login credentials/i.test(msg)) return "That email and password don't match.";
+    if (/already registered|already exists/i.test(msg)) return "An account with this email already exists — try signing in.";
+    if (/at least 6|Password should/i.test(msg)) return "Password must be at least 6 characters.";
+    if (/relation .* does not exist|Could not find the table|schema/i.test(msg)) return "The database schema hasn't been applied yet. Run the SQL in supabase/migrations first.";
+    return msg;
+  }
+
+  /* ---------------- SESSION → APP ---------------- */
+  async function enterApp() {
+    const session = await S.currentSession();
+    if (!session) { renderLogin(); return; }
+    S.meId = session.user.id;
+    document.body.className = "";
+    document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">O</div><div class="boot-bar"><span></span></div><p>Loading your workspace…</p></div>`;
+    try {
+      await S.hydrate();
+      // A brand-new user may sign in a beat before the profile-creation trigger
+      // commits; retry hydrate briefly so `me()` resolves.
+      let tries = 0;
+      while (!S.me() && tries < 5) { await new Promise((r) => setTimeout(r, 400)); await S.hydrate(); tries++; }
+      if (!S.me()) throw new Error("Your profile isn't ready yet. Refresh in a moment.");
+      S.touchPresence();
+      if (!location.hash || location.hash === "#") location.hash = "#/";
       renderShell();
       router.render();
-      const me = S.me();
-      ui.toast("Signed in as " + me.name + " — " + OM.ROLES[me.role].label + ".", "good");
-    }));
+    } catch (ex) {
+      document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">O</div><p class="boot-error">${esc(friendlyAuthError(ex.message || String(ex)))}</p><button class="btn btn-ghost" onclick="location.reload()">Retry</button> <button class="btn btn-ghost" id="bootOut">Sign out</button></div>`;
+      const bo = document.getElementById("bootOut"); if (bo) bo.addEventListener("click", async () => { await S.signOut(); renderLogin(); });
+    }
   }
 
   /* ---------------- BOOT ---------------- */
-  function boot() {
-    S.load();
-    S.restoreSession();
-    if (S.meId) { renderShell(); router.render(); }
+  async function boot() {
+    if (!OM.db.init()) { renderConfigError(); return; }
+    // React to sign-out from other tabs / token expiry.
+    OM.db.client.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") { S.meId = null; S.db = null; renderLogin(); }
+    });
+    const session = await S.currentSession();
+    if (session) await enterApp();
     else renderLogin();
   }
+
+  function renderConfigError() {
+    document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">O</div><p class="boot-error">Backend not configured.</p><p class="muted">Add your Supabase project URL and publishable key to <code>js/config.js</code>, then reload.</p></div>`;
+  }
+
+  OM.enterApp = enterApp;
   document.addEventListener("DOMContentLoaded", boot);
 })();

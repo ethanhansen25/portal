@@ -83,8 +83,8 @@
         { name: "memo", label: "Memo", required: true, span2: true },
       ], (v, close) => {
         const amt = +v.amount;
-        const n = S.db.counters.inv++;
-        S.create("invoice", { id: "inv-" + n, number: "INV-" + n, clientId: v.clientId, projectId: v.projectId || null, amount: amt, tax: Math.round(amt * 0.0825), total: Math.round(amt * 1.0825), status: "draft", issuedAt: Date.now(), dueAt: Date.now() + (+v.netDays) * U.DAY, paidAt: null, memo: v.memo, items: [{ desc: v.memo, qty: 1, rate: amt }] }, "Drafted invoice INV-" + n + " — " + U.money(amt));
+        const number = S.nextInvoiceNumber();
+        S.create("invoice", { number, clientId: v.clientId, projectId: v.projectId || null, amount: amt, tax: Math.round(amt * 0.0825), total: Math.round(amt * 1.0825), status: "draft", issuedAt: Date.now(), dueAt: Date.now() + (+v.netDays) * U.DAY, paidAt: null, memo: v.memo, items: [{ desc: v.memo, qty: 1, rate: amt }] }, "Drafted invoice " + number + " — " + U.money(amt));
         close(); ui.toast("Invoice drafted.", "good"); OM.router.refresh();
       }));
     } else if (tab === "expenses") {
@@ -177,10 +177,10 @@
     ], (v, close) => {
       const e = S.create("expense", { vendor: v.vendor, amount: +v.amount, category: v.category, projectId: v.projectId || null, memo: v.memo, date: Date.now(), submittedBy: S.meId, status: "pending" }, "Submitted expense — " + v.vendor + " " + U.money(+v.amount));
       const me = S.me();
-      const ap = S.db.approvals; // route to approval
-      ap.push({ id: S.uid("ap"), type: "expense", title: "Expense — " + v.vendor + " " + U.money(+v.amount), refType: "expense", refId: e.id, requestedBy: S.meId, requestedAt: Date.now(), amount: +v.amount, status: "pending", priority: +v.amount > 2000 ? "high" : "medium", approverRoles: [+v.amount > 2500 ? "exec" : "dept_head:" + me.dept], decisions: [], description: v.memo });
-      S.notify((+v.amount > 2500 ? S.execIds() : [S.deptHeadId(me.dept)]).filter(Boolean), "approval", "Approval needed: " + v.vendor + " " + U.money(+v.amount), "Submitted by " + me.name, "#/approvals");
-      S.save(); close(); ui.toast("Expense submitted for approval.", "good"); OM.router.refresh();
+      const bigTicket = +v.amount > 2500;
+      S.create("approval", { type: "expense", title: "Expense — " + v.vendor + " " + U.money(+v.amount), refType: "expense", refId: e.id, requestedBy: S.meId, requestedAt: Date.now(), amount: +v.amount, status: "pending", priority: +v.amount > 2000 ? "high" : "medium", approverRoles: [bigTicket ? "exec" : "dept_head:" + me.dept], description: v.memo });
+      S.notify((bigTicket ? S.execIds() : [S.deptHeadId(me.dept)]).filter(Boolean), "approval", "Approval needed: " + v.vendor + " " + U.money(+v.amount), "Submitted by " + me.name, "#/approvals");
+      close(); ui.toast("Expense submitted for approval.", "good"); OM.router.refresh();
     });
   };
 
@@ -229,10 +229,8 @@
             // Hires require an approval chain: HR + CEO
             const existing = S.db.approvals.find((a) => a.refType === "candidate" && a.refId === c.id && a.status === "pending");
             if (!existing) {
-              S.db.approvals.push({ id: S.uid("ap"), type: "hire", title: "New hire — " + c.name + " (" + c.roleApplied + ")", refType: "candidate", refId: c.id, requestedBy: S.meId, requestedAt: Date.now(), status: "pending", priority: "high", approverRoles: ["hr", "ceo"], decisions: [], description: "Move to hired requires HR + CEO sign-off." });
+              S.create("approval", { type: "hire", title: "New hire — " + c.name + " (" + c.roleApplied + ")", refType: "candidate", refId: c.id, requestedBy: S.meId, requestedAt: Date.now(), status: "pending", priority: "high", approverRoles: ["hr", "ceo"], description: "Move to hired requires HR + CEO sign-off." }, "Routed hire of " + c.name + " for approval (HR + CEO)");
               S.notify(S.execIds().concat(S.deptHeadId("Human Resources")), "approval", "Hire approval needed: " + c.name, c.roleApplied + " · " + c.dept, "#/approvals");
-              S.audit("create", "approval", c.id, "Routed hire of " + c.name + " for approval (HR + CEO)");
-              S.save();
             }
             ui.toast("Hires require HR + CEO approval — routed to the Approval Center.", "warn");
             OM.router.refresh();
@@ -269,20 +267,10 @@
           ${t.status === "pending" && S.can("approve", "timeoff", t) ? `<button class="btn btn-gold btn-sm" data-to-app="${t.id}">Approve</button><button class="btn btn-danger-ghost btn-sm" data-to-den="${t.id}">Deny</button>` : ui.badge(t.status)}
         </div>`).join("") + "</div>";
       body.querySelectorAll("[data-to-app]").forEach((b) => b.addEventListener("click", () => {
-        const t = S.find("timeoff", b.dataset.toApp);
-        S.assertCan("approve", "timeoff", t);
-        t.status = "approved";
-        S.audit("approve", "timeoff", t.id, "Approved time off — " + S.userName(t.userId) + " (" + t.days + "d)");
-        S.notify(t.userId, "hr", "Time off approved", U.date(t.start) + " → " + U.date(t.end), "#/settings");
-        S.save(); OM.router.refresh();
+        S.decideTimeOff(b.dataset.toApp, "approved"); OM.router.refresh();
       }));
       body.querySelectorAll("[data-to-den]").forEach((b) => b.addEventListener("click", () => {
-        const t = S.find("timeoff", b.dataset.toDen);
-        S.assertCan("approve", "timeoff", t);
-        t.status = "denied";
-        S.audit("approve", "timeoff", t.id, "Denied time off — " + S.userName(t.userId));
-        S.notify(t.userId, "hr", "Time off denied", "Talk to your manager for details.", "#/settings");
-        S.save(); OM.router.refresh();
+        S.decideTimeOff(b.dataset.toDen, "denied"); OM.router.refresh();
       }));
     } else if (tab === "reviews") {
       body.innerHTML = `<div class="card card-flush">` + S.db.reviews.map((r) => `
@@ -301,18 +289,47 @@
     const rev = S.db.reviews.filter((r) => r.userId === u.id);
     const to = S.db.timeOff.filter((t) => t.userId === u.id);
     const acts = S.db.hrActions.filter((a) => a.userId === u.id);
-    ui.modal(u.name, `
+    const me = S.me();
+    const canEdit = S.isExec(me) || me.dept === "Human Resources";
+    const m = ui.modal(u.name, `
       <div class="detail-grid">
-        <div><span class="detail-label">Title</span><b>${esc(u.title)}</b></div>
+        <div><span class="detail-label">Title</span><b>${esc(u.title || "—")}</b></div>
         <div><span class="detail-label">Department</span><b>${esc(u.dept)}</b></div>
         <div><span class="detail-label">Role</span><b>${OM.ROLES[u.role].label}</b></div>
         <div><span class="detail-label">Hired</span><b>${U.date(u.hireDate)}</b></div>
         <div><span class="detail-label">Compensation</span><b>${u.salary ? U.money(u.salary) + "/yr" : u.rate ? "$" + u.rate + "/hr" : "—"}</b></div>
         <div><span class="detail-label">Contact</span><b>${esc(u.email)}</b></div>
       </div>
+      ${u.role === "intern" && u.dept === "Unassigned" ? `<div class="inline-note">This member hasn't been placed yet. Assign their role and department to give them the right access.</div>` : ""}
       <h4 class="modal-sub">Reviews</h4>${rev.map((r) => `<div class="list-row"><span class="list-main">${esc(r.period)} — score <b>${r.score}</b></span><span class="muted">${esc(r.summary)}</span></div>`).join("") || '<p class="muted">None.</p>'}
       <h4 class="modal-sub">Time off</h4>${to.map((t) => `<div class="list-row"><span class="list-main">${esc(t.type)} · ${U.dateShort(t.start)} → ${U.dateShort(t.end)}</span>${ui.badge(t.status)}</div>`).join("") || '<p class="muted">None.</p>'}
-      ${acts.length ? `<h4 class="modal-sub">Records</h4>` + acts.map((a) => `<div class="list-row"><span class="list-main">${U.cap(a.type)} — ${esc(a.summary)}</span>${ui.badge(a.status)}</div>`).join("") : ""}`, { wide: true });
+      ${acts.length ? `<h4 class="modal-sub">Records</h4>` + acts.map((a) => `<div class="list-row"><span class="list-main">${U.cap(a.type)} — ${esc(a.summary)}</span>${ui.badge(a.status)}</div>`).join("") : ""}`,
+      { wide: true, footer: canEdit ? `<button class="btn btn-ghost" data-role="cancel2">Close</button><button class="btn btn-gold" id="editMember">Edit member</button>` : "" });
+    if (canEdit) {
+      const c2 = m.el.querySelector('[data-role="cancel2"]'); if (c2) c2.addEventListener("click", m.close);
+      m.el.querySelector("#editMember").addEventListener("click", () => { m.close(); editMemberModal(u); });
+    }
+  }
+
+  function editMemberModal(u) {
+    const me = S.me();
+    const canPay = S.isExec(me) || me.dept === "Finance";
+    const fields = [
+      { name: "name", label: "Name", value: u.name, required: true },
+      { name: "title", label: "Title", value: u.title || "" },
+      { name: "dept", label: "Department", type: "select", value: u.dept, options: ["Executive", "Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration", "Contractors", "Unassigned"] },
+      { name: "role", label: "Role", type: "select", value: u.role, options: Object.entries(OM.ROLES).map(([k, v]) => [k, v.label]) },
+      { name: "status", label: "Status", type: "select", value: u.status, options: [["active", "Active"], ["offboarded", "Offboarded"]] },
+    ];
+    if (canPay) {
+      fields.push({ name: "salary", label: "Annual salary ($)", type: "number", value: u.salary || "", hint: "Leave blank if hourly / contractor" });
+      fields.push({ name: "rate", label: "Hourly rate ($)", type: "number", value: u.rate || "", hint: "For contractors" });
+    }
+    ui.formModal("Edit " + u.name, fields, (v, close) => {
+      S.updateProfile(u.id, { name: v.name, title: v.title, dept: v.dept, role: v.role, status: v.status }, "Placed " + v.name + " as " + OM.ROLES[v.role].label + " · " + v.dept);
+      if (canPay && (v.salary !== "" || v.rate !== "")) S.setCompensation(u.id, v.salary !== "" ? +v.salary : null, v.rate !== "" ? +v.rate : null);
+      close(); ui.toast(v.name + " updated.", "good"); OM.router.refresh();
+    }, { wide: true });
   }
 
   /* ================= EQUIPMENT ================= */
@@ -524,8 +541,8 @@
         </div>`).join("") || ui.empty("You're all caught up.", "✓")) + "</div>";
     el.querySelectorAll("[data-n]").forEach((r) => r.addEventListener("click", () => {
       const n = S.db.notifications.find((x) => x.id === r.dataset.n);
-      n.read = true; S.save();
-      location.hash = n.link || "#/";
+      S.markRead(n.id);
+      location.hash = (n.link || "#/").replace(/^#?/, "#").replace("##", "#");
     }));
     const ma = el.querySelector("#markAll");
     if (ma) ma.addEventListener("click", () => { S.markAllRead(); OM.router.refresh(); });
@@ -574,8 +591,8 @@
       `</div><div>` +
       ui.sectionCard("What my role can do", permSummary(me)) +
       ui.sectionCard("My recent activity", ui.timeline(myAudit.map((a) => ({ ts: a.ts, title: esc(a.summary) })))) +
-      ui.sectionCard("Workspace", `<p class="muted">Demo data lives in your browser. Resetting restores the seeded company state.</p>
-        <button class="btn btn-danger-ghost" id="resetDb">Reset workspace data</button>`) +
+      ui.sectionCard("Session", `<p class="muted">You're signed in as ${esc(me.email)}. Your workspace data is stored securely in the cloud and shared with your team in real time.</p>
+        <button class="btn btn-ghost" id="signOutSettings">Sign out</button>`) +
       `</div></div>`;
     el.querySelector("#reqTO").addEventListener("click", () => ui.formModal("Request time off", [
       { name: "type", label: "Type", type: "select", options: ["Vacation", "Sick", "Personal"] },
@@ -585,13 +602,11 @@
     ], (v, close) => {
       const start = Date.now() + (+v.startDays) * U.DAY;
       const t = S.create("timeoff", { userId: S.meId, type: v.type, start, end: start + (+v.days - 1) * U.DAY, days: +v.days, status: "pending", reason: v.reason || "" }, "Requested time off — " + v.days + "d " + v.type);
-      S.db.approvals.push({ id: S.uid("ap"), type: "timeoff", title: "Time off — " + me.name + ", " + v.days + " day" + (v.days > 1 ? "s" : ""), refType: "timeoff", refId: t.id, requestedBy: S.meId, requestedAt: Date.now(), status: "pending", priority: "low", approverRoles: ["dept_head:" + me.dept], decisions: [], description: v.type + " starting " + U.date(start) });
+      S.create("approval", { type: "timeoff", title: "Time off — " + me.name + ", " + v.days + " day" + (v.days > 1 ? "s" : ""), refType: "timeoff", refId: t.id, requestedBy: S.meId, requestedAt: Date.now(), status: "pending", priority: "low", approverRoles: ["dept_head:" + me.dept], description: v.type + " starting " + U.date(start) });
       S.notify([S.deptHeadId(me.dept)].filter(Boolean), "hr", "Time off request: " + me.name, v.days + "d " + v.type, "#/approvals");
-      S.save(); close(); ui.toast("Request submitted for approval.", "good"); OM.router.refresh();
+      close(); ui.toast("Request submitted for approval.", "good"); OM.router.refresh();
     }));
-    el.querySelector("#resetDb").addEventListener("click", () => ui.confirmModal("Reset workspace", "This restores the original seeded company data and removes your local changes. Continue?", () => {
-      S.reset(); location.reload();
-    }, { danger: true, okLabel: "Reset" }));
+    el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; location.reload(); });
   };
 
   function permSummary(me) {
