@@ -372,6 +372,14 @@
         case "proposal":
           if (action === "create") return dept === "Sales" || role === "dept_head" || role === "project_lead";
           return dept === "Sales" || role === "dept_head";
+        case "clientMessage":
+          // The real recipient-scoping gate (client -> only assigned staff,
+          // staff -> only clients they're assigned to) lives in RLS via
+          // staff_assigned_to_client()/client_assigned_staff_ids(); this just
+          // lets either side attempt the write, and self-scopes a client to
+          // their own company's messages.
+          if (u.portalType === "client") return action === "view" || (action === "create" && (!rec || rec.clientId === u.clientId));
+          return true;
         case "notification":
           return rec ? rec.userId === u.id : true;
         case "user":

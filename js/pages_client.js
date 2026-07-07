@@ -405,7 +405,7 @@
   CP.pages.meetings = function (el) {
     const rows = S.db.meetings.filter((m) => m.clientId === me().clientId).sort((a, b) => b.ts - a.ts);
     el.innerHTML = ui.pageHead("Meetings", "Scheduled and past meetings with Oakframe") +
-      `<div class="card card-flush">${rows.map((m) => `<div class="list-row"><span class="list-icon">◫</span><span class="list-main"><b>${esc(m.title)}</b><span class="muted">${U.dateTime(m.ts)} · ${esc(m.location || "")}</span></span>${m.ts > Date.now() ? ui.badge("info", "Upcoming") : ui.badge("neutral", "Past")}</div>`).join("") || ui.empty("No meetings scheduled yet.")}</div>`;
+      `<div class="card card-flush">${rows.map((m) => `<div class="list-row"><span class="list-icon">◫</span><span class="list-main"><b>${esc(m.title)}</b><span class="muted">${U.dateTime(m.ts)} · ${esc(m.location || "")}</span></span>${m.ts > Date.now() ? '<span class="badge tone-info">Upcoming</span>' : '<span class="badge tone-neutral">Past</span>'}</div>`).join("") || ui.empty("No meetings scheduled yet.")}</div>`;
   };
 
   /* ================= NOTIFICATIONS ================= */
