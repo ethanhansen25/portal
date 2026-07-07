@@ -191,6 +191,7 @@
     tab = tab || "employees";
     el.innerHTML = ui.pageHead("People", "Employees, hiring, time off, reviews, and records") + `<div id="htabs"></div><div id="hbody" class="tab-body"></div>`;
     ui.tabs(el.querySelector("#htabs"), [
+      { id: "pending", label: "Pending Staff", count: S.db.users.filter((u) => u.status === "pending").length },
       { id: "employees", label: "Employees", count: S.db.users.filter((u) => u.status === "active").length },
       { id: "hiring", label: "Hiring", count: S.db.candidates.filter((c) => !["hired", "rejected"].includes(c.stage)).length },
       { id: "timeoff", label: "Time Off", count: S.db.timeOff.filter((t) => t.status === "pending").length },
@@ -199,7 +200,16 @@
     ], tab, (t) => (location.hash = "#/hr/" + t));
     const body = el.querySelector("#hbody");
 
-    if (tab === "employees") {
+    if (tab === "pending") {
+      const pending = S.db.users.filter((u) => u.status === "pending");
+      body.innerHTML = ui.sectionCard("New sign-ups awaiting placement",
+        pending.length ? pending.map((u) => `
+        <div class="list-row"><span class="list-icon">☺</span>
+          <span class="list-main"><b>${esc(u.name)}</b><span class="muted">${esc(u.email)}${u.phone ? " · " + esc(u.phone) : ""} · signed up ${U.date(u.createdAt)}</span></span>
+          <button class="btn btn-gold btn-sm" data-approve="${u.id}">Review & approve</button>
+        </div>`).join("") : ui.empty("No pending signups right now. New accounts land here with zero access until placed."));
+      body.querySelectorAll("[data-approve]").forEach((b) => b.addEventListener("click", () => approvalModal(S.find("user", b.dataset.approve))));
+    } else if (tab === "employees") {
       body.innerHTML = `<div class="card card-flush" id="empTbl"></div>`;
       ui.table(body.querySelector("#empTbl"), {
         rows: () => S.db.users,
@@ -284,6 +294,38 @@
         <div class="list-row"><span class="list-main"><b>Ben Carter — internship ends in 5 weeks</b><span class="muted">Conversion decision due 2 weeks prior. Sofia to submit recommendation.</span></span>${ui.badge("scheduled")}</div>`);
     }
   };
+
+  // Turns a pending signup (Status=Pending, Access=None, Portal Type=Unassigned)
+  // into a placed Staff / Contractor / Client account. All the actual work —
+  // placement, project-team seeding, onboarding assignment, notification,
+  // audit — happens inside the approve_user() RPC so it can't be partially
+  // applied; this just collects the form and hands it off.
+  function approvalModal(u) {
+    const clients = S.db.clients.slice().sort((a, b) => a.name.localeCompare(b.name)).map((c) => [c.id, c.name]);
+    const projects = S.db.projects.filter((p) => p.status === "active").map((p) => [p.id, p.code + " · " + p.name]);
+    const managers = S.db.users.filter((m) => m.status === "active" && m.id !== u.id).map((m) => [m.id, m.name + " · " + (m.title || m.dept)]);
+    const templates = S.db.onboardingTemplates.map((t) => [t.id, t.name]);
+    ui.formModal("Approve — " + u.name, [
+      { name: "email", label: "Email", type: "readonly", value: u.email },
+      { name: "phone", label: "Phone", type: "readonly", value: u.phone || "—" },
+      { name: "portalType", label: "Portal type", type: "select", required: true, options: [["staff", "Staff"], ["contractor", "Contractor"], ["client", "Client"]] },
+      { name: "dept", label: "Department", type: "select", options: ["Executive", "Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration", "Contractors"], hint: "Staff / contractor only" },
+      { name: "role", label: "Role", type: "select", options: Object.entries(OM.ROLES).filter(([k]) => k !== "client").map(([k, v]) => [k, v.label]), hint: "Staff / contractor only" },
+      { name: "title", label: "Title", placeholder: "e.g. Editor II" },
+      { name: "company", label: "Company", placeholder: "Company name", hint: "Client only" },
+      { name: "clientId", label: "Assigned client", type: "select", options: [["", "— None —"]].concat(clients), hint: "Client only — which company this contact belongs to" },
+      { name: "projectId", label: "Assigned project", type: "select", options: [["", "— None —"]].concat(projects), hint: "Staff only — adds them to the project team" },
+      { name: "managerId", label: "Manager", type: "select", options: [["", "— None —"]].concat(managers) },
+      { name: "permissionGroup", label: "Permission group", placeholder: "e.g. Standard Staff, Department Head" },
+      { name: "onboardingTemplateId", label: "Onboarding template", type: "select", options: [["", "— None —"]].concat(templates), hint: "Assigns the checklist immediately (staff only)" },
+      { name: "notes", label: "Notes", type: "textarea", span2: true, hint: "Saved as an HR note — visible only to HR and executives" },
+    ], (v, close) => {
+      if (!v.portalType) throw new Error("Choose a portal type.");
+      return S.approveUser(u.id, v).then(() => {
+        close(); ui.toast(u.name + " approved and placed.", "good"); OM.router.refresh();
+      });
+    }, { wide: true, submitLabel: "Approve & place" });
+  }
 
   function hrEmployeeModal(u) {
     const rev = S.db.reviews.filter((r) => r.userId === u.id);
