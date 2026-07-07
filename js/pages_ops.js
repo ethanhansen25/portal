@@ -318,7 +318,12 @@
       }));
     } else if (tab === "reviews") {
       const canCreate = S.can("create", "review", { userId: "" }) || S.isExec(S.me()) || S.me().dept === "Human Resources" || S.me().role === "dept_head";
-      body.innerHTML = ui.sectionCard("Performance reviews", S.db.reviews.slice().reverse().map((r) => `
+      const due = reviewsDue();
+      body.innerHTML =
+        (due.length ? ui.sectionCard("Reviews due", due.map((d) => `
+          <div class="list-row clickable" data-due-user="${d.u.id}"><span class="list-icon">⏱</span>
+          <span class="list-main"><b>${esc(d.u.name)}</b><span class="muted">${esc(d.label)} · hired ${U.date(d.u.hireDate)}</span></span></div>`).join("")) : "") +
+        ui.sectionCard("Performance reviews", S.db.reviews.slice().reverse().map((r) => `
         <div class="list-row clickable" data-review="${r.id}"><span class="list-main"><b>${esc(S.userName(r.userId))} — ${U.cap(r.reviewType || "review")} ${esc(r.period || "")}</b>
         <span class="muted">Reviewer: ${esc(S.userName(r.reviewerId))} · Final rating ${esc(r.finalRating || r.score || "—")}</span></span>${ui.badge(r.status)}</div>`).join("")
         || ui.empty("No reviews recorded yet."),
@@ -326,6 +331,7 @@
       const nr = body.querySelector("#newReview");
       if (nr) nr.addEventListener("click", () => reviewModal());
       body.querySelectorAll("[data-review]").forEach((row) => row.addEventListener("click", () => reviewDetailModal(S.find("review", row.dataset.review))));
+      body.querySelectorAll("[data-due-user]").forEach((row) => row.addEventListener("click", () => reviewModal(row.dataset.dueUser)));
     } else if (tab === "actions") {
       body.innerHTML = ui.sectionCard("Coaching, write-ups & warnings", S.db.hrActions.map((a) => `
         <div class="list-row"><span class="list-icon">${a.type === "writeup" ? "⚠" : "✎"}</span>
@@ -334,10 +340,31 @@
   };
 
   const REVIEW_TYPES = [["30_day", "30-day"], ["60_day", "60-day"], ["90_day", "90-day"], ["quarterly", "Quarterly"], ["annual", "Annual"], ["project", "Project-based"], ["contractor", "Contractor"]];
-  function reviewModal() {
+  // No cron/scheduled-job infrastructure exists in this project, so "review
+  // due" reminders can't fire as a push notification on their own — this
+  // computes the same thing on demand from tenure + existing review history
+  // and surfaces it as a worklist instead.
+  function reviewsDue() {
+    const now = Date.now();
+    const staff = S.db.users.filter((u) => u.status === "active" && u.portalType !== "client" && u.hireDate);
+    const has = (uid, type) => S.db.reviews.some((r) => r.userId === uid && r.reviewType === type);
+    const out = [];
+    staff.forEach((u) => {
+      const tenureDays = (now - u.hireDate) / U.DAY;
+      if (tenureDays >= 25 && tenureDays <= 45 && !has(u.id, "30_day")) out.push({ u, label: "30-day review due" });
+      else if (tenureDays >= 55 && tenureDays <= 75 && !has(u.id, "60_day")) out.push({ u, label: "60-day review due" });
+      else if (tenureDays >= 85 && tenureDays <= 105 && !has(u.id, "90_day")) out.push({ u, label: "90-day review due" });
+      else if (tenureDays >= 350) {
+        const annualCount = S.db.reviews.filter((r) => r.userId === u.id && r.reviewType === "annual").length;
+        if (annualCount < Math.floor(tenureDays / 365)) out.push({ u, label: "Annual review due" });
+      }
+    });
+    return out;
+  }
+  function reviewModal(presetUserId) {
     const staff = S.db.users.filter((u) => u.status === "active" && u.portalType !== "client").map((u) => [u.id, u.name + " · " + (u.title || u.dept)]);
     ui.formModal("New performance review", [
-      { name: "userId", label: "Employee", type: "select", required: true, options: staff },
+      { name: "userId", label: "Employee", type: "select", required: true, options: staff, value: presetUserId || "" },
       { name: "reviewType", label: "Review type", type: "select", required: true, options: REVIEW_TYPES },
       { name: "period", label: "Period label", placeholder: "e.g. Q3 2026", required: true },
       { name: "performanceScore", label: "Performance (1–5)", type: "number", step: "0.1" },
