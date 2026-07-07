@@ -1,0 +1,611 @@
+/* Oakframe Media OS — Finance, HR, Equipment, Library, Approvals, Audit, Notifications, Settings */
+(function () {
+  const OM = window.OM;
+  const U = OM.util, ui = OM.ui, ch = OM.charts;
+  const S = OM.store, M = OM.metrics;
+  const esc = U.esc;
+
+  /* ================= FINANCE ================= */
+  OM.pages.finance = function (el, tab) {
+    if (!S.moduleAccess("finance")) { el.innerHTML = ui.empty("Finance is restricted to the Finance department and executives.", "🔒"); return; }
+    tab = tab || "overview";
+    el.innerHTML = ui.pageHead("Finance", "Revenue, invoicing, spend, payroll, and budgets") + `<div id="ftabs"></div><div id="fbody" class="tab-body"></div>`;
+    ui.tabs(el.querySelector("#ftabs"), [
+      { id: "overview", label: "Overview" },
+      { id: "invoices", label: "Invoices", count: M.outstanding().length },
+      { id: "expenses", label: "Expenses", count: S.db.expenses.filter((e) => e.status === "pending").length },
+      { id: "payroll", label: "Payroll" },
+      { id: "budgets", label: "Budgets" },
+      { id: "reports", label: "Reports" },
+    ], tab, (t) => (location.hash = "#/finance/" + t));
+    const body = el.querySelector("#fbody");
+
+    if (tab === "overview") {
+      const series = M.monthlySeries(12);
+      const mtd = M.revenueMTD(), emtd = M.expensesMTD();
+      body.innerHTML = ui.kpi([
+        { label: "Revenue MTD", value: U.money(mtd, { compact: true }), spark: ch.spark(series.map((s2) => s2.revenue)) },
+        { label: "Revenue YTD", value: U.money(M.revenueYTD(), { compact: true }) },
+        { label: "Expenses MTD", value: U.money(emtd, { compact: true }) },
+        { label: "Net MTD", value: U.money(mtd - emtd, { compact: true }), tone: mtd - emtd >= 0 ? "good" : "bad" },
+        { label: "Accounts receivable", value: U.money(M.arTotal(), { compact: true }), sub: M.overdue().length + " overdue", tone: M.overdue().length ? "warn" : null, link: "#/finance/invoices" },
+      ]) + `<div class="grid-2">
+        <div>${ui.sectionCard("Revenue vs expenses — 12 months", '<div id="revChart"></div>')}</div>
+        <div>${ui.sectionCard("Expenses by category — 90 days", '<div id="expChart"></div>')}</div>
+      </div>`;
+      ch.line(body.querySelector("#revChart"), { labels: series.map((s2) => s2.label), series: [{ name: "Revenue", values: series.map((s2) => s2.revenue) }, { name: "Expenses", values: series.map((s2) => s2.expenses) }], money: true }, { height: 240 });
+      ch.donut(body.querySelector("#expChart"), M.expenseByCategory(90).slice(0, 6), { money: true, fmt: (v) => U.money(v, { compact: true }), center: U.money(M.expenseByCategory(90).reduce((s2, x) => s2 + x.value, 0), { compact: true }), centerSub: "90-day spend" });
+    } else if (tab === "invoices") {
+      body.innerHTML = `<div class="card card-flush" id="invTbl"></div>`;
+      ui.table(body.querySelector("#invTbl"), {
+        rows: () => S.db.invoices,
+        searchKeys: ["number", "memo", (i) => { const c = S.find("client", i.clientId); return c ? c.name : ""; }],
+        exportName: "invoices", exportEntity: "invoice",
+        defaultSort: { key: "issuedAt", dir: -1 },
+        actions: S.can("create", "invoice") ? `<button class="btn btn-gold btn-sm" id="newInv">+ New invoice</button>` : "",
+        columns: [
+          { key: "number", label: "Invoice", render: (i) => `<span class="mono">${esc(i.number)}</span>` },
+          { key: "client", label: "Client", render: (i) => { const c = S.find("client", i.clientId); return c ? esc(c.name) : "—"; }, sortVal: (i) => { const c = S.find("client", i.clientId); return c ? c.name : ""; } },
+          { key: "memo", label: "Memo", render: (i) => `<span class="muted">${esc(i.memo || "")}</span>` },
+          { key: "total", label: "Total", render: (i) => `<b>${U.money(i.total)}</b>`, sortVal: (i) => i.total },
+          { key: "issuedAt", label: "Issued", render: (i) => U.date(i.issuedAt), sortVal: (i) => i.issuedAt },
+          { key: "dueAt", label: "Due", render: (i) => i.status === "paid" ? '<span class="muted">paid ' + U.dateShort(i.paidAt) + "</span>" : (i.dueAt < Date.now() ? `<span class="tone-text-bad">${U.date(i.dueAt)}</span>` : U.date(i.dueAt)), sortVal: (i) => i.dueAt },
+          { key: "status", label: "Status", render: (i) => ui.badge(i.status) },
+          { key: "act", label: "", render: (i) => actionButtons(i) },
+        ],
+        afterRender: bindInvoiceActions,
+      });
+      function actionButtons(i) {
+        if (!S.can("edit", "invoice", i)) return "";
+        let btns = "";
+        if (i.status === "draft") btns += `<button class="btn btn-ghost btn-sm" data-send="${i.id}">Send</button>`;
+        if (["sent", "overdue", "viewed", "partial"].includes(i.status)) btns += `<button class="btn btn-ghost btn-sm" data-paid="${i.id}">Mark paid</button>`;
+        return btns;
+      }
+      function bindInvoiceActions(host) {
+        host.querySelectorAll("[data-send]").forEach((b) => b.addEventListener("click", () => {
+          S.update("invoice", b.dataset.send, { status: "sent" }, "Sent invoice " + S.find("invoice", b.dataset.send).number);
+          ui.toast("Invoice sent.", "good"); OM.router.refresh();
+        }));
+        host.querySelectorAll("[data-paid]").forEach((b) => b.addEventListener("click", () => {
+          const inv = S.find("invoice", b.dataset.paid);
+          S.update("invoice", inv.id, { status: "paid", paidAt: Date.now() }, "Recorded payment — " + inv.number + " " + U.money(inv.total));
+          S.notify(S.execIds(), "finance", "Payment received — " + U.money(inv.total), inv.number + " · " + ((S.find("client", inv.clientId) || {}).name || ""), "#/finance/invoices");
+          ui.toast("Payment recorded.", "good"); OM.router.refresh();
+        }));
+      }
+      const nb = body.querySelector("#newInv");
+      if (nb) nb.addEventListener("click", () => ui.formModal("New invoice", [
+        { name: "clientId", label: "Client", type: "select", options: S.db.clients.map((c) => [c.id, c.name]), required: true },
+        { name: "projectId", label: "Project", type: "select", options: [["", "—"]].concat(S.db.projects.map((p) => [p.id, p.code + " · " + p.name])) },
+        { name: "amount", label: "Amount ($, pre-tax)", type: "number", required: true },
+        { name: "netDays", label: "Terms (net days)", type: "number", value: 30 },
+        { name: "memo", label: "Memo", required: true, span2: true },
+      ], (v, close) => {
+        const amt = +v.amount;
+        const n = S.db.counters.inv++;
+        S.create("invoice", { id: "inv-" + n, number: "INV-" + n, clientId: v.clientId, projectId: v.projectId || null, amount: amt, tax: Math.round(amt * 0.0825), total: Math.round(amt * 1.0825), status: "draft", issuedAt: Date.now(), dueAt: Date.now() + (+v.netDays) * U.DAY, paidAt: null, memo: v.memo, items: [{ desc: v.memo, qty: 1, rate: amt }] }, "Drafted invoice INV-" + n + " — " + U.money(amt));
+        close(); ui.toast("Invoice drafted.", "good"); OM.router.refresh();
+      }));
+    } else if (tab === "expenses") {
+      body.innerHTML = `<div class="card card-flush" id="expTbl"></div>`;
+      ui.table(body.querySelector("#expTbl"), {
+        rows: () => S.db.expenses.slice().sort((a, b) => b.date - a.date),
+        searchKeys: ["vendor", "category", "memo", (e) => S.userName(e.submittedBy)],
+        exportName: "expenses", exportEntity: "expense",
+        actions: S.can("create", "expense") ? `<button class="btn btn-gold btn-sm" id="newExp">+ Submit expense</button>` : "",
+        columns: [
+          { key: "date", label: "Date", render: (e) => U.date(e.date), sortVal: (e) => e.date },
+          { key: "vendor", label: "Vendor", render: (e) => `<b>${esc(e.vendor)}</b><div class="muted">${esc(e.memo || "")}</div>` },
+          { key: "category", label: "Category" },
+          { key: "submittedBy", label: "Submitted by", render: (e) => esc(S.userName(e.submittedBy)) },
+          { key: "amount", label: "Amount", render: (e) => U.money(e.amount), sortVal: (e) => e.amount },
+          { key: "status", label: "Status", render: (e) => ui.badge(e.status) },
+        ],
+      });
+      const nb = body.querySelector("#newExp");
+      if (nb) nb.addEventListener("click", () => OM.actions.submitExpense());
+    } else if (tab === "payroll") {
+      const next = M.payrollDue();
+      const activeStaff = S.db.users.filter((u) => u.status === "active" && u.salary > 0);
+      const annual = activeStaff.reduce((s2, u) => s2 + u.salary, 0);
+      body.innerHTML = ui.kpi([
+        { label: "Next run", value: next ? U.dateShort(next.runDate) : "—", sub: next ? U.until(next.runDate) : "" },
+        { label: "Amount due", value: next ? U.money(next.total) : "—", tone: "warn" },
+        { label: "Employees on payroll", value: activeStaff.length, sub: S.db.users.filter((u) => u.role === "contractor").length + " contractors invoice separately" },
+        { label: "Annualized payroll", value: U.money(annual, { compact: true }) },
+      ]) +
+      ui.sectionCard("Run history", S.db.payroll.map((p) => `
+        <div class="list-row"><span class="list-icon">$</span><span class="list-main"><b>${esc(p.period)}</b><span class="muted">${U.date(p.runDate)} · ${esc(p.note || "")}</span></span><span><b>${U.money(p.total)}</b></span>${ui.badge(p.status)}</div>`).join("")) +
+      (S.meIsExec() || S.me().dept === "Finance" ? ui.sectionCard("Salary register (confidential)", `<div class="card-flush" id="salTbl"></div>`) : "");
+      const st = body.querySelector("#salTbl");
+      if (st) ui.table(st, {
+        rows: () => activeStaff,
+        searchKeys: ["name", "dept", "title"],
+        exportName: "salary-register", exportEntity: "payroll",
+        columns: [
+          { key: "name", label: "Employee", render: (u) => ui.userCell(u.id), sortVal: (u) => u.name },
+          { key: "dept", label: "Department" },
+          { key: "role", label: "Role", render: (u) => OM.ROLES[u.role].label },
+          { key: "salary", label: "Annual salary", render: (u) => U.money(u.salary), sortVal: (u) => u.salary },
+          { key: "per", label: "Per period", render: (u) => U.money(u.salary / 24), sortVal: (u) => u.salary },
+        ],
+      });
+    } else if (tab === "budgets") {
+      body.innerHTML = ui.sectionCard("Department budgets — YTD burn", '<div id="budChart"></div>') +
+        `<div class="card card-flush">` + S.db.budgets.map((b) => {
+          const pct2 = (b.spentYTD / b.annual) * 100;
+          const yearPct = ((new Date().getMonth() + 1) / 12) * 100;
+          return `<div class="list-row"><span class="list-main"><b>${esc(b.dept)}</b><span class="muted">${U.money(b.spentYTD)} of ${U.money(b.annual)} annual</span></span>${ch.meter(pct2, { color: pct2 > yearPct + 8 ? ch.STATUS.critical : pct2 > yearPct ? ch.STATUS.warning : ch.SERIES[2] })}<span class="muted">${Math.round(pct2)}%</span></div>`;
+        }).join("") + "</div>" + `<p class="muted footnote">Amber = burning faster than the calendar (${Math.round(((new Date().getMonth() + 1) / 12) * 100)}% of year elapsed).</p>`;
+      ch.hbars(body.querySelector("#budChart"), S.db.budgets.map((b) => ({ label: b.dept, value: b.spentYTD })), { money: true, fmt: (v) => U.money(v, { compact: true }) });
+    } else if (tab === "reports") {
+      const series = M.monthlySeries(12);
+      const ytdRev = M.revenueYTD(), ytdExp = M.expensesYTD();
+      body.innerHTML = ui.kpi([
+        { label: "YTD revenue", value: U.money(ytdRev, { compact: true }) },
+        { label: "YTD expenses", value: U.money(ytdExp, { compact: true }) },
+        { label: "YTD net", value: U.money(ytdRev - ytdExp, { compact: true }), tone: ytdRev - ytdExp >= 0 ? "good" : "bad" },
+        { label: "Avg invoice", value: U.money(S.db.invoices.reduce((s2, i) => s2 + i.total, 0) / Math.max(1, S.db.invoices.length), { compact: true }) },
+      ]) + ui.sectionCard("Revenue by client — YTD", '<div id="cliChart"></div>') +
+      ui.sectionCard("Export center", `<div class="export-grid">
+        <button class="btn btn-ghost" data-x="pl">⤓ P&L by month (CSV)</button>
+        <button class="btn btn-ghost" data-x="ar">⤓ AR aging (CSV)</button>
+        <button class="btn btn-ghost" data-x="cli">⤓ Revenue by client (CSV)</button>
+      </div>`);
+      ch.hbars(body.querySelector("#cliChart"), M.revenueByClientYTD().slice(0, 8).map((r) => ({ label: r.client.name, value: r.amt })), { money: true, fmt: (v) => U.money(v, { compact: true }) });
+      body.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", () => {
+        try { S.assertCan("export", "invoice"); } catch (e) { ui.toast(e.message, "bad"); return; }
+        let csv, name;
+        if (b.dataset.x === "pl") { name = "pnl-monthly"; csv = U.csv([["Month", "Revenue", "Expenses", "Net"]].concat(series.map((s2) => [s2.label, s2.revenue, s2.expenses, s2.revenue - s2.expenses]))); }
+        else if (b.dataset.x === "ar") { name = "ar-aging"; csv = U.csv([["Invoice", "Client", "Total", "Due", "Days overdue"]].concat(M.outstanding().map((i) => [i.number, (S.find("client", i.clientId) || {}).name, i.total, U.date(i.dueAt), Math.max(0, Math.floor((Date.now() - i.dueAt) / U.DAY))]))); }
+        else { name = "revenue-by-client"; csv = U.csv([["Client", "Revenue YTD"]].concat(M.revenueByClientYTD().map((r) => [r.client.name, r.amt]))); }
+        U.download(name + ".csv", csv);
+        S.audit("export", "invoice", "*", "Exported report — " + name);
+        ui.toast("Report exported.", "good");
+      }));
+    }
+  };
+
+  OM.actions.submitExpense = function () {
+    ui.formModal("Submit expense", [
+      { name: "vendor", label: "Vendor", required: true },
+      { name: "amount", label: "Amount ($)", type: "number", required: true, step: "0.01" },
+      { name: "category", label: "Category", type: "select", options: ["Equipment", "Software", "Travel", "Contractors", "Marketing", "Utilities", "Meals", "Insurance"] },
+      { name: "projectId", label: "Bill to project", type: "select", options: [["", "— Overhead —"]].concat(S.db.projects.filter((p) => p.status === "active").map((p) => [p.id, p.code + " · " + p.name])) },
+      { name: "memo", label: "Description", type: "textarea", required: true, span2: true },
+    ], (v, close) => {
+      const e = S.create("expense", { vendor: v.vendor, amount: +v.amount, category: v.category, projectId: v.projectId || null, memo: v.memo, date: Date.now(), submittedBy: S.meId, status: "pending" }, "Submitted expense — " + v.vendor + " " + U.money(+v.amount));
+      const me = S.me();
+      const ap = S.db.approvals; // route to approval
+      ap.push({ id: S.uid("ap"), type: "expense", title: "Expense — " + v.vendor + " " + U.money(+v.amount), refType: "expense", refId: e.id, requestedBy: S.meId, requestedAt: Date.now(), amount: +v.amount, status: "pending", priority: +v.amount > 2000 ? "high" : "medium", approverRoles: [+v.amount > 2500 ? "exec" : "dept_head:" + me.dept], decisions: [], description: v.memo });
+      S.notify((+v.amount > 2500 ? S.execIds() : [S.deptHeadId(me.dept)]).filter(Boolean), "approval", "Approval needed: " + v.vendor + " " + U.money(+v.amount), "Submitted by " + me.name, "#/approvals");
+      S.save(); close(); ui.toast("Expense submitted for approval.", "good"); OM.router.refresh();
+    });
+  };
+
+  /* ================= HR ================= */
+  const HIRE_STAGES = [["applied", "Applied"], ["screen", "Phone Screen"], ["interview", "Interview"], ["offer", "Offer"], ["hired", "Hired"], ["rejected", "Rejected"]];
+  OM.pages.hr = function (el, tab) {
+    if (!S.moduleAccess("hr")) { el.innerHTML = ui.empty("Human Resources is restricted to the HR team and executives.", "🔒"); return; }
+    tab = tab || "employees";
+    el.innerHTML = ui.pageHead("People", "Employees, hiring, time off, reviews, and records") + `<div id="htabs"></div><div id="hbody" class="tab-body"></div>`;
+    ui.tabs(el.querySelector("#htabs"), [
+      { id: "employees", label: "Employees", count: S.db.users.filter((u) => u.status === "active").length },
+      { id: "hiring", label: "Hiring", count: S.db.candidates.filter((c) => !["hired", "rejected"].includes(c.stage)).length },
+      { id: "timeoff", label: "Time Off", count: S.db.timeOff.filter((t) => t.status === "pending").length },
+      { id: "reviews", label: "Reviews" },
+      { id: "actions", label: "Actions & Records" },
+    ], tab, (t) => (location.hash = "#/hr/" + t));
+    const body = el.querySelector("#hbody");
+
+    if (tab === "employees") {
+      body.innerHTML = `<div class="card card-flush" id="empTbl"></div>`;
+      ui.table(body.querySelector("#empTbl"), {
+        rows: () => S.db.users,
+        searchKeys: ["name", "dept", "title", "email"],
+        exportName: "employees", exportEntity: "employee",
+        columns: [
+          { key: "name", label: "Employee", render: (u) => ui.userCell(u.id), sortVal: (u) => u.name },
+          { key: "dept", label: "Department" },
+          { key: "role", label: "Role", render: (u) => OM.ROLES[u.role].label, sortVal: (u) => OM.ROLES[u.role].level },
+          { key: "hireDate", label: "Tenure", render: (u) => { const y = (Date.now() - u.hireDate) / (365 * U.DAY); return y >= 1 ? y.toFixed(1) + " yrs" : Math.round(y * 12) + " mos"; }, sortVal: (u) => u.hireDate },
+          { key: "salary", label: "Salary", render: (u) => u.salary ? U.money(u.salary) : (u.rate ? "$" + u.rate + "/hr" : "—"), sortVal: (u) => u.salary },
+          { key: "status", label: "Status", render: (u) => ui.badge(u.status) },
+        ],
+        onRow: (u) => hrEmployeeModal(u),
+      });
+    } else if (tab === "hiring") {
+      body.innerHTML = `<div class="row-gap">${S.can("create", "candidate") ? '<button class="btn btn-gold btn-sm" id="newCand">+ Add candidate</button>' : ""}</div><div id="hireKb"></div>`;
+      ui.kanban(body.querySelector("#hireKb"), {
+        columns: HIRE_STAGES.map(([id, label]) => ({ id, label })),
+        items: S.db.candidates,
+        colOf: (c) => c.stage,
+        canMove: (c) => S.can("edit", "candidate", c),
+        card: (c) => `<div class="kc-title">${esc(c.name)}</div><div class="kc-sub">${esc(c.roleApplied)} · ${esc(c.dept)}</div>
+          <div class="kc-meta"><span class="muted">${esc(c.source)}</span><span>${"★".repeat(c.rating || 0)}<span class="muted">${"★".repeat(5 - (c.rating || 0))}</span></span></div>`,
+        onMove: (c, col) => {
+          if (col === "hired") {
+            // Hires require an approval chain: HR + CEO
+            const existing = S.db.approvals.find((a) => a.refType === "candidate" && a.refId === c.id && a.status === "pending");
+            if (!existing) {
+              S.db.approvals.push({ id: S.uid("ap"), type: "hire", title: "New hire — " + c.name + " (" + c.roleApplied + ")", refType: "candidate", refId: c.id, requestedBy: S.meId, requestedAt: Date.now(), status: "pending", priority: "high", approverRoles: ["hr", "ceo"], decisions: [], description: "Move to hired requires HR + CEO sign-off." });
+              S.notify(S.execIds().concat(S.deptHeadId("Human Resources")), "approval", "Hire approval needed: " + c.name, c.roleApplied + " · " + c.dept, "#/approvals");
+              S.audit("create", "approval", c.id, "Routed hire of " + c.name + " for approval (HR + CEO)");
+              S.save();
+            }
+            ui.toast("Hires require HR + CEO approval — routed to the Approval Center.", "warn");
+            OM.router.refresh();
+            return;
+          }
+          S.update("candidate", c.id, { stage: col }, "Moved candidate " + c.name + " → " + U.cap(col));
+          OM.router.refresh();
+        },
+        onCard: (c) => ui.modal(c.name, `<div class="detail-grid">
+            <div><span class="detail-label">Role</span><b>${esc(c.roleApplied)}</b></div>
+            <div><span class="detail-label">Department</span><b>${esc(c.dept)}</b></div>
+            <div><span class="detail-label">Applied</span><b>${U.date(c.appliedAt)}</b></div>
+            <div><span class="detail-label">Source</span><b>${esc(c.source)}</b></div>
+            <div><span class="detail-label">Rating</span><b>${"★".repeat(c.rating || 0) || "unrated"}</b></div>
+            <div><span class="detail-label">Email</span><b>${esc(c.email)}</b></div>
+          </div><p class="body-text">${esc(c.notes || "No notes.")}</p>`),
+      });
+      const nc = body.querySelector("#newCand");
+      if (nc) nc.addEventListener("click", () => ui.formModal("Add candidate", [
+        { name: "name", label: "Name", required: true },
+        { name: "roleApplied", label: "Role", required: true },
+        { name: "dept", label: "Department", type: "select", options: ["Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration"] },
+        { name: "source", label: "Source", type: "select", options: ["Careers page", "LinkedIn", "Indeed", "Referral", "Career fair"] },
+        { name: "email", label: "Email", type: "email" },
+        { name: "notes", label: "Notes", type: "textarea", span2: true },
+      ], (v, close) => {
+        S.create("candidate", { name: v.name, roleApplied: v.roleApplied, dept: v.dept, source: v.source, email: v.email, notes: v.notes, stage: "applied", appliedAt: Date.now(), rating: 0 }, "Added candidate — " + v.name);
+        close(); OM.router.refresh();
+      }));
+    } else if (tab === "timeoff") {
+      body.innerHTML = `<div class="card card-flush">` + S.db.timeOff.slice().sort((a, b) => b.start - a.start).map((t) => `
+        <div class="list-row"><span class="list-icon">✈</span>
+          <span class="list-main"><b>${esc(S.userName(t.userId))} — ${esc(t.type)}</b><span class="muted">${U.date(t.start)} → ${U.date(t.end)} · ${t.days} day${t.days > 1 ? "s" : ""}${t.reason ? " · " + esc(t.reason) : ""}</span></span>
+          ${t.status === "pending" && S.can("approve", "timeoff", t) ? `<button class="btn btn-gold btn-sm" data-to-app="${t.id}">Approve</button><button class="btn btn-danger-ghost btn-sm" data-to-den="${t.id}">Deny</button>` : ui.badge(t.status)}
+        </div>`).join("") + "</div>";
+      body.querySelectorAll("[data-to-app]").forEach((b) => b.addEventListener("click", () => {
+        const t = S.find("timeoff", b.dataset.toApp);
+        S.assertCan("approve", "timeoff", t);
+        t.status = "approved";
+        S.audit("approve", "timeoff", t.id, "Approved time off — " + S.userName(t.userId) + " (" + t.days + "d)");
+        S.notify(t.userId, "hr", "Time off approved", U.date(t.start) + " → " + U.date(t.end), "#/settings");
+        S.save(); OM.router.refresh();
+      }));
+      body.querySelectorAll("[data-to-den]").forEach((b) => b.addEventListener("click", () => {
+        const t = S.find("timeoff", b.dataset.toDen);
+        S.assertCan("approve", "timeoff", t);
+        t.status = "denied";
+        S.audit("approve", "timeoff", t.id, "Denied time off — " + S.userName(t.userId));
+        S.notify(t.userId, "hr", "Time off denied", "Talk to your manager for details.", "#/settings");
+        S.save(); OM.router.refresh();
+      }));
+    } else if (tab === "reviews") {
+      body.innerHTML = `<div class="card card-flush">` + S.db.reviews.map((r) => `
+        <div class="list-row"><span class="list-main"><b>${esc(S.userName(r.userId))} — ${esc(r.period)}</b><span class="muted">${esc(r.summary)}</span><span class="muted">Reviewer: ${esc(S.userName(r.reviewerId))}</span></span>
+        <span class="review-score ${r.score >= 4.5 ? "tone-text-good" : r.score < 3.5 ? "tone-text-warn" : ""}">${r.score}</span>${ui.badge(r.status)}</div>`).join("") + "</div>";
+    } else if (tab === "actions") {
+      body.innerHTML = ui.sectionCard("Coaching, write-ups & warnings", S.db.hrActions.map((a) => `
+        <div class="list-row"><span class="list-icon">${a.type === "writeup" ? "⚠" : "✎"}</span>
+        <span class="list-main"><b>${esc(S.userName(a.userId))} — ${U.cap(a.type)}</b><span class="muted">${esc(a.summary)}</span><span class="muted">Issued by ${esc(S.userName(a.issuedBy))} · ${U.date(a.date)}</span></span>${ui.badge(a.status)}</div>`).join("") || ui.empty("No records.")) +
+      ui.sectionCard("Onboarding & offboarding", `<div class="list-row"><span class="list-main"><b>Marcus Doyle — Editor II</b><span class="muted">Onboarding blocked on CEO approval (AP-4). Checklist ready: equipment, accounts, handbook, W-4.</span></span>${ui.badge("pending")}</div>
+        <div class="list-row"><span class="list-main"><b>Ben Carter — internship ends in 5 weeks</b><span class="muted">Conversion decision due 2 weeks prior. Sofia to submit recommendation.</span></span>${ui.badge("scheduled")}</div>`);
+    }
+  };
+
+  function hrEmployeeModal(u) {
+    const rev = S.db.reviews.filter((r) => r.userId === u.id);
+    const to = S.db.timeOff.filter((t) => t.userId === u.id);
+    const acts = S.db.hrActions.filter((a) => a.userId === u.id);
+    ui.modal(u.name, `
+      <div class="detail-grid">
+        <div><span class="detail-label">Title</span><b>${esc(u.title)}</b></div>
+        <div><span class="detail-label">Department</span><b>${esc(u.dept)}</b></div>
+        <div><span class="detail-label">Role</span><b>${OM.ROLES[u.role].label}</b></div>
+        <div><span class="detail-label">Hired</span><b>${U.date(u.hireDate)}</b></div>
+        <div><span class="detail-label">Compensation</span><b>${u.salary ? U.money(u.salary) + "/yr" : u.rate ? "$" + u.rate + "/hr" : "—"}</b></div>
+        <div><span class="detail-label">Contact</span><b>${esc(u.email)}</b></div>
+      </div>
+      <h4 class="modal-sub">Reviews</h4>${rev.map((r) => `<div class="list-row"><span class="list-main">${esc(r.period)} — score <b>${r.score}</b></span><span class="muted">${esc(r.summary)}</span></div>`).join("") || '<p class="muted">None.</p>'}
+      <h4 class="modal-sub">Time off</h4>${to.map((t) => `<div class="list-row"><span class="list-main">${esc(t.type)} · ${U.dateShort(t.start)} → ${U.dateShort(t.end)}</span>${ui.badge(t.status)}</div>`).join("") || '<p class="muted">None.</p>'}
+      ${acts.length ? `<h4 class="modal-sub">Records</h4>` + acts.map((a) => `<div class="list-row"><span class="list-main">${U.cap(a.type)} — ${esc(a.summary)}</span>${ui.badge(a.status)}</div>`).join("") : ""}`, { wide: true });
+  }
+
+  /* ================= EQUIPMENT ================= */
+  OM.pages.equipment = function (el) {
+    const cats = ["All", ...new Set(S.db.equipment.map((e) => e.category))];
+    let activeCat = "All";
+    const me = S.me();
+    function draw() {
+      const rows = S.db.equipment.filter((e) => activeCat === "All" || e.category === activeCat);
+      const counts = { available: 0, checked_out: 0, maintenance: 0, damaged: 0, assigned: 0 };
+      S.db.equipment.forEach((e) => counts[e.status] !== undefined && counts[e.status]++);
+      el.innerHTML = ui.pageHead("Equipment room", "Every asset, its condition, and who has it") +
+        ui.kpi([
+          { label: "Fleet value", value: U.money(S.db.equipment.reduce((s2, e) => s2 + e.value, 0), { compact: true }), sub: S.db.equipment.length + " assets" },
+          { label: "Available", value: counts.available, tone: "good" },
+          { label: "Checked out / assigned", value: counts.checked_out + counts.assigned },
+          { label: "Maintenance", value: counts.maintenance, tone: counts.maintenance ? "warn" : null },
+          { label: "Damaged", value: counts.damaged, tone: counts.damaged ? "bad" : null },
+        ]) +
+        `<div class="tab-row sub-tabs">${cats.map((c) => `<button class="tab ${c === activeCat ? "active" : ""}" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}</div>
+        <div class="eq-grid">${rows.map((e) => `
+          <div class="card eq-card">
+            <div class="eq-top"><span class="mono muted">${esc(e.assetTag)}</span>${ui.badge(e.status)}</div>
+            <b class="eq-name">${esc(e.name)}</b>
+            <span class="muted">${esc(e.category)} · SN ${esc(e.serial)} · ${U.money(e.value, { compact: true })}</span>
+            <span class="muted">${esc(e.location)}${e.assignedTo ? " · with " + esc(S.userName(e.assignedTo)) : ""}</span>
+            ${e.note ? `<span class="eq-note">${esc(e.note)}</span>` : ""}
+            <div class="eq-actions">
+              ${e.status === "available" && S.can("checkout", "equipment", e) ? `<button class="btn btn-gold btn-sm" data-out="${e.id}">Check out</button>` : ""}
+              ${(e.status === "checked_out") && S.can("checkin", "equipment", e) && (e.assignedTo === me.id || S.isExec(me) || me.dept === "Technology" || me.role === "dept_head") ? `<button class="btn btn-ghost btn-sm" data-in="${e.id}">Check in</button>` : ""}
+              ${S.can("manage", "equipment", e) && e.status !== "maintenance" ? `<button class="btn btn-ghost btn-sm" data-mnt="${e.id}">→ Maintenance</button>` : ""}
+              ${S.can("manage", "equipment", e) && (e.status === "maintenance" || e.status === "damaged") ? `<button class="btn btn-ghost btn-sm" data-fix="${e.id}">Mark repaired</button>` : ""}
+            </div>
+          </div>`).join("")}</div>`;
+      el.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => { activeCat = b.dataset.cat; draw(); }));
+      el.querySelectorAll("[data-out]").forEach((b) => b.addEventListener("click", () => ui.formModal("Check out equipment", [
+        { name: "projectId", label: "For project", type: "select", options: [["", "— General use —"]].concat(S.db.projects.filter((p) => p.status === "active").map((p) => [p.id, p.code + " · " + p.name])) },
+      ], (v, close) => { S.checkoutEquipment(b.dataset.out, v.projectId || null); close(); ui.toast("Checked out. It's on you now.", "good"); draw(); })));
+      el.querySelectorAll("[data-in]").forEach((b) => b.addEventListener("click", () => ui.formModal("Check in equipment", [
+        { name: "condition", label: "Condition on return", type: "select", options: [["good", "Good"], ["fair", "Fair — flag for inspection"], ["damaged", "Damaged — file report"]] },
+        { name: "note", label: "Notes / damage description", type: "textarea", span2: true },
+      ], (v, close) => { S.checkinEquipment(b.dataset.in, v.condition, v.note); close(); ui.toast(v.condition === "damaged" ? "Checked in — damage report routed to Technology." : "Checked in.", v.condition === "damaged" ? "warn" : "good"); draw(); })));
+      el.querySelectorAll("[data-mnt]").forEach((b) => b.addEventListener("click", () => {
+        S.update("equipment", b.dataset.mnt, { status: "maintenance" }, "Sent " + S.find("equipment", b.dataset.mnt).name + " to maintenance");
+        draw();
+      }));
+      el.querySelectorAll("[data-fix]").forEach((b) => b.addEventListener("click", () => {
+        S.update("equipment", b.dataset.fix, { status: "available", condition: "good", note: null, location: "Studio A cage" }, "Marked " + S.find("equipment", b.dataset.fix).name + " repaired and available");
+        draw();
+      }));
+    }
+    draw();
+  };
+
+  /* ================= LIBRARY (resources + documents) ================= */
+  OM.pages.resources = function (el) {
+    const me = S.me();
+    const visible = () => S.db.resources.filter((r) => S.can("view", "resource", r));
+    const cats = ["All", ...new Set(visible().map((r) => r.category))];
+    let activeCat = "All", q = "";
+    function draw() {
+      const rows = visible().filter((r) => (activeCat === "All" || r.category === activeCat) && (!q || (r.name + " " + (r.tags || []).join(" ")).toLowerCase().includes(q.toLowerCase())));
+      el.innerHTML = ui.pageHead("Resource library", "Templates, SOPs, playbooks, and brand assets — filtered to what your role can see",
+        S.can("create", "resource") ? `<button class="btn btn-gold" id="upRes">⇪ Upload</button>` : "") +
+        `<div class="lib-toolbar">
+          <div class="search-box"><input type="text" id="libQ" placeholder="Search library…" value="${esc(q)}"></div>
+          <div class="tab-row sub-tabs">${cats.map((c) => `<button class="tab ${c === activeCat ? "active" : ""}" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}</div>
+        </div>
+        <div class="lib-grid">${rows.map((r) => `
+          <div class="card lib-card">
+            <div class="lib-top"><span class="file-icon">${r.type.toUpperCase()}</span><span class="muted">v${r.version}</span></div>
+            <b>${esc(r.name)}</b>
+            <span class="muted">${esc(r.category)} · ${U.fileSize(r.size)} · ${esc(S.userName(r.uploadedBy))}</span>
+            <div class="lib-tags">${(r.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}${r.depts ? `<span class="tag tag-lock">🔒 ${r.depts.join(", ")}</span>` : ""}</div>
+            <div class="eq-actions">
+              <button class="btn btn-ghost btn-sm" data-dl="${r.id}">⤓ Download</button>
+              <button class="btn btn-ghost btn-sm" data-view="${r.id}">Preview</button>
+            </div>
+          </div>`).join("") || ui.empty("Nothing matches this filter.")}</div>`;
+      el.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => { activeCat = b.dataset.cat; draw(); }));
+      const qi = el.querySelector("#libQ");
+      qi.addEventListener("input", () => { q = qi.value; const pos = qi.selectionStart; draw(); const n = el.querySelector("#libQ"); n.focus(); n.setSelectionRange(pos, pos); });
+      el.querySelectorAll("[data-dl]").forEach((b) => b.addEventListener("click", () => {
+        const r = S.find("resource", b.dataset.dl);
+        S.audit("export", "resource", r.id, "Downloaded — " + r.name);
+        ui.toast("Download started: " + r.name, "info");
+      }));
+      el.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
+        const r = S.find("resource", b.dataset.view);
+        ui.modal(r.name, `<div class="preview-box"><span class="file-icon xl">${r.type.toUpperCase()}</span>
+          <p class="muted">Version ${r.version} · ${U.fileSize(r.size)} · uploaded ${U.date(r.uploadedAt)} by ${esc(S.userName(r.uploadedBy))}</p>
+          <div class="detail-grid"><div><span class="detail-label">Category</span><b>${esc(r.category)}</b></div>
+          <div><span class="detail-label">Access</span><b>${r.depts ? esc(r.depts.join(", ")) : "Company-wide"} · ${OM.ROLES[r.minRole] ? OM.ROLES[r.minRole].label + "+" : "All roles"}</b></div></div>
+          <h4 class="modal-sub">Version history</h4>
+          ${Array.from({ length: Math.min(3, r.version) }, (_, i) => `<div class="list-row"><span class="list-main">v${r.version - i}${i === 0 ? " (current)" : ""}</span><span class="muted">${U.date(r.uploadedAt - i * 30 * U.DAY)}</span></div>`).join("")}`);
+      }));
+      const up = el.querySelector("#upRes");
+      if (up) up.addEventListener("click", () => ui.formModal("Upload to library", [
+        { name: "name", label: "Resource name", required: true, span2: true },
+        { name: "category", label: "Category", type: "select", options: ["Contracts", "Handbooks", "Templates", "SOPs", "Production", "Creative", "Sales", "Finance", "Technology", "HR", "Legal", "Brand Assets", "Training", "Equipment Guides", "Marketing", "Archive"] },
+        { name: "type", label: "File type", type: "select", options: ["pdf", "docx", "xlsx", "zip", "mp4"] },
+        { name: "minRole", label: "Minimum role", type: "select", options: Object.entries(OM.ROLES).filter(([k]) => !OM.ROLES[k].exec).map(([k, v]) => [k, v.label]).reverse() },
+        { name: "tags", label: "Tags (comma-separated)", span2: true },
+      ], (v, close) => {
+        S.create("resource", { name: v.name, category: v.category, type: v.type, size: 250000, uploadedBy: S.meId, uploadedAt: Date.now(), tags: (v.tags || "").split(",").map((s2) => s2.trim()).filter(Boolean), minRole: v.minRole, version: 1 }, "Uploaded resource — " + v.name);
+        close(); ui.toast("Uploaded to library.", "good"); draw();
+      }));
+    }
+    draw();
+  };
+
+  OM.pages.documents = function (el) {
+    const visible = () => S.db.documents.filter((d) => S.can("view", "document", d));
+    el.innerHTML = ui.pageHead("Documents", "Contracts, filings, releases, and records — everything searchable",
+      S.can("create", "document") ? `<button class="btn btn-gold" onclick="OM.actions.uploadDoc(null,null)">⇪ Upload</button>` : "");
+    const host = document.createElement("div");
+    host.className = "card card-flush";
+    el.appendChild(host);
+    ui.table(host, {
+      rows: visible,
+      searchKeys: ["name", "category", (d) => (d.tags || []).join(" "), (d) => { const c = S.find("client", d.clientId); return c ? c.name : ""; }],
+      exportName: "document-register", exportEntity: "document",
+      defaultSort: { key: "uploadedAt", dir: -1 },
+      columns: [
+        { key: "name", label: "Document", render: (d) => `<span class="file-icon">${d.type.toUpperCase()}</span> <b>${esc(d.name)}</b>${d.confidential ? ' <span class="badge tone-bad">Confidential</span>' : ""}` },
+        { key: "category", label: "Category" },
+        { key: "rel", label: "Related to", render: (d) => { const c = S.find("client", d.clientId); const p = S.find("project", d.projectId); return c ? esc(c.name) : p ? esc(p.code) : '<span class="muted">Company</span>'; } },
+        { key: "version", label: "Ver", render: (d) => "v" + d.version },
+        { key: "uploadedBy", label: "By", render: (d) => esc(S.userName(d.uploadedBy)) },
+        { key: "uploadedAt", label: "Date", render: (d) => U.date(d.uploadedAt), sortVal: (d) => d.uploadedAt },
+      ],
+    });
+  };
+
+  /* ================= COMMUNICATIONS MODULE ================= */
+  OM.pages.comms = function (el) {
+    el.innerHTML = ui.pageHead("Communications", "Calls, emails, meetings, texts, voice notes, and internal notes — one ledger") + `<div id="commPanel"></div>`;
+    const me = S.me();
+    OM.renderCommsPanel(el.querySelector("#commPanel"), () => S.db.comms.filter((c) => {
+      if (S.isExec(me) || (me.role === "dept_head" && me.dept === "Sales")) return true;
+      if (me.dept === "Sales") return c.userId === me.id || (c.leadId && (S.find("lead", c.leadId) || {}).assignedTo === me.id);
+      return c.userId === me.id || (c.clientId && S.myClientIds(me).has(c.clientId));
+    }));
+  };
+
+  /* ================= APPROVAL CENTER ================= */
+  OM.pages.approvals = function (el) {
+    const me = S.me();
+    if (!S.moduleAccess("approvals") && !S.db.approvals.some((a) => a.requestedBy === me.id)) {
+      el.innerHTML = ui.empty("The Approval Center is for approvers. Your submitted requests will appear in notifications.", "🔒");
+      return;
+    }
+    const mine = S.db.approvals.filter((a) => S.can("view", "approval", a) || a.requestedBy === me.id);
+    const pending = mine.filter((a) => a.status === "pending");
+    const history = mine.filter((a) => a.status !== "pending").sort((a, b) => b.requestedAt - a.requestedAt);
+    const typeIcons = { expense: "$", contract: "✎", hire: "☺", equipment: "⚙", timeoff: "✈", invoice: "▤", promotion: "▲", permission: "🔑" };
+
+    el.innerHTML = ui.pageHead("Approval Center", "Everything waiting on a decision — expenses, hires, contracts, purchases") +
+      ui.kpi([
+        { label: "Waiting on you", value: pending.filter((a) => S.can("approve", "approval", a)).length, tone: "warn" },
+        { label: "Total pending", value: pending.length },
+        { label: "Pending value", value: U.money(pending.reduce((s2, a) => s2 + (a.amount || 0), 0), { compact: true }) },
+        { label: "Decided (30d)", value: history.filter((a) => (a.decisions || []).some((d) => d.ts > Date.now() - 30 * U.DAY)).length },
+      ]) +
+      ui.sectionCard("Pending", pending.length ? pending.map((a) => `
+        <div class="approval-row">
+          <span class="list-icon">${typeIcons[a.type] || "✓"}</span>
+          <span class="list-main">
+            <b>${esc(a.title)}</b>
+            <span class="muted">${esc(a.description || "")}</span>
+            <span class="muted">Requested by ${esc(S.userName(a.requestedBy))} · ${U.ago(a.requestedAt)} · needs: ${(a.approverRoles || []).map((r) => r === "exec" ? "Executive" : r === "ceo" ? "CEO" : r === "hr" ? "HR" : "Head of " + r.split(":")[1]).join(" + ")}</span>
+            ${(a.decisions || []).map((d) => `<span class="muted">✓ ${esc(S.userName(d.userId))} ${d.decision} ${U.ago(d.ts)}${d.note ? " — “" + esc(d.note) + "”" : ""}</span>`).join("")}
+          </span>
+          ${a.amount ? `<span class="lead-value">${U.money(a.amount)}</span>` : ""}
+          <span class="badge tone-${{ urgent: "bad", high: "warn", medium: "info", low: "neutral" }[a.priority]}">${U.cap(a.priority)}</span>
+          ${S.can("approve", "approval", a) && !(a.decisions || []).some((d) => d.userId === me.id) ? `
+            <span class="cq-actions"><button class="btn btn-gold btn-sm" data-app="${a.id}">Approve</button>
+            <button class="btn btn-danger-ghost btn-sm" data-rej="${a.id}">Reject</button></span>` : (a.decisions || []).some((d) => d.userId === me.id) ? '<span class="muted">You decided</span>' : ""}
+        </div>`).join("") : ui.empty("Nothing pending. The queue is clear.", "✓")) +
+      ui.sectionCard("Decision history", history.slice(0, 12).map((a) => `
+        <div class="list-row"><span class="list-icon">${typeIcons[a.type] || "✓"}</span>
+        <span class="list-main"><b>${esc(a.title)}</b><span class="muted">${(a.decisions || []).map((d) => esc(S.userName(d.userId)) + " " + d.decision + (d.note ? " — “" + esc(d.note) + "”" : "")).join(" · ")}</span></span>
+        ${ui.badge(a.status)}</div>`).join("") || ui.empty("No decisions yet."));
+
+    el.querySelectorAll("[data-app]").forEach((b) => b.addEventListener("click", () => ui.formModal("Approve", [
+      { name: "note", label: "Note (optional)", type: "textarea", span2: true },
+    ], (v, close) => {
+      S.decideApproval(b.dataset.app, "approved", v.note);
+      close(); ui.toast("Approved.", "good"); OM.router.refresh();
+    }, { submitLabel: "Approve" })));
+    el.querySelectorAll("[data-rej]").forEach((b) => b.addEventListener("click", () => ui.formModal("Reject", [
+      { name: "note", label: "Reason (required — sent to requester and audit log)", type: "textarea", required: true, span2: true },
+    ], (v, close) => {
+      S.decideApproval(b.dataset.rej, "rejected", v.note);
+      close(); ui.toast("Rejected with reason.", "warn"); OM.router.refresh();
+    }, { submitLabel: "Reject" })));
+  };
+
+  /* ================= NOTIFICATIONS ================= */
+  OM.pages.notifications = function (el) {
+    const rows = S.myNotifications();
+    el.innerHTML = ui.pageHead("Notifications", rows.filter((n) => !n.read).length + " unread",
+      rows.some((n) => !n.read) ? `<button class="btn btn-ghost" id="markAll">Mark all read</button>` : "") +
+      `<div class="card card-flush">` + (rows.slice(0, 60).map((n) => `
+        <div class="list-row notif ${n.read ? "" : "unread"} clickable" data-n="${n.id}">
+          <span class="list-icon">${ui.KIND_ICONS[n.kind] || "•"}</span>
+          <span class="list-main"><b>${esc(n.title)}</b><span class="muted">${esc(n.body || "")}</span></span>
+          <span class="muted">${U.ago(n.ts)}</span>${n.read ? "" : '<span class="unread-dot"></span>'}
+        </div>`).join("") || ui.empty("You're all caught up.", "✓")) + "</div>";
+    el.querySelectorAll("[data-n]").forEach((r) => r.addEventListener("click", () => {
+      const n = S.db.notifications.find((x) => x.id === r.dataset.n);
+      n.read = true; S.save();
+      location.hash = n.link || "#/";
+    }));
+    const ma = el.querySelector("#markAll");
+    if (ma) ma.addEventListener("click", () => { S.markAllRead(); OM.router.refresh(); });
+  };
+
+  /* ================= AUDIT CENTER (exec only) ================= */
+  OM.pages.audit = function (el) {
+    if (!S.can("view", "audit")) { el.innerHTML = ui.empty("The audit log is restricted to executives.", "🔒"); return; }
+    el.innerHTML = ui.pageHead("Audit Center", "Append-only ledger of every action in the system — nothing here can be edited or deleted");
+    const host = document.createElement("div");
+    host.className = "card card-flush";
+    el.appendChild(host);
+    ui.table(host, {
+      rows: () => S.db.audit.slice().reverse(),
+      searchKeys: ["summary", "action", "entity", (a) => S.userName(a.userId), "dept"],
+      exportName: "audit-log", exportEntity: "audit-export",
+      pageSize: 30,
+      columns: [
+        { key: "ts", label: "Time", width: "150px", render: (a) => `<span class="mono muted">${U.dateTime(a.ts)}</span>`, sortVal: (a) => a.ts },
+        { key: "userId", label: "Actor", render: (a) => `<b>${esc(S.userName(a.userId))}</b><div class="muted">${OM.ROLES[a.role] ? OM.ROLES[a.role].label : esc(a.role)} · ${esc(a.dept)}</div>`, sortVal: (a) => S.userName(a.userId) },
+        { key: "action", label: "Action", render: (a) => `<span class="badge tone-${a.denied ? "bad" : { create: "good", delete: "bad", approve: "warn", export: "info", manage: "warn" }[a.action] || "neutral"}">${a.denied ? "DENIED" : U.cap(a.action)}</span>` },
+        { key: "summary", label: "Detail", render: (a) => `${esc(a.summary)}${a.reason ? `<div class="muted">Reason: ${esc(a.reason)}</div>` : ""}${a.prev || a.next ? `<div class="muted mono diff">${a.prev ? "− " + esc(String(a.prev).slice(0, 80)) : ""}${a.next ? "<br>+ " + esc(String(a.next).slice(0, 80)) : ""}</div>` : ""}` },
+        { key: "ip", label: "IP / Client", render: (a) => `<span class="mono muted">${esc(a.ip)}</span><div class="muted">${esc(a.ua || "")}</div>` },
+      ],
+    });
+  };
+
+  /* ================= SETTINGS / PROFILE ================= */
+  OM.pages.settings = function (el) {
+    const me = S.me();
+    const myTimeOff = S.db.timeOff.filter((t) => t.userId === me.id);
+    const myAudit = S.db.audit.filter((a) => a.userId === me.id).slice(-10).reverse();
+    el.innerHTML = ui.pageHead("Profile & settings", "") +
+      `<div class="grid-2"><div>` +
+      ui.sectionCard("My profile", `<div class="profile-row">${ui.avatar(me, "lg")}
+        <div><b>${esc(me.name)}</b><div class="muted">${esc(me.title)} · ${esc(me.dept)}</div>
+        <span class="badge tone-${S.isExec(me) ? "warn" : "neutral"}">${OM.ROLES[me.role].label}</span></div></div>
+        <div class="detail-grid">
+          <div><span class="detail-label">Email</span><b>${esc(me.email)}</b></div>
+          <div><span class="detail-label">Phone</span><b>${esc(me.phone)}</b></div>
+          <div><span class="detail-label">Joined</span><b>${U.date(me.hireDate)}</b></div>
+          <div><span class="detail-label">Access level</span><b>${OM.ROLES[me.role].level}</b></div>
+        </div>`) +
+      ui.sectionCard("My time off", myTimeOff.map((t) => `<div class="list-row"><span class="list-main">${esc(t.type)} · ${U.dateShort(t.start)} → ${U.dateShort(t.end)}</span>${ui.badge(t.status)}</div>`).join("") + `
+        <div class="row-gap"><button class="btn btn-gold btn-sm" id="reqTO">+ Request time off</button></div>`) +
+      `</div><div>` +
+      ui.sectionCard("What my role can do", permSummary(me)) +
+      ui.sectionCard("My recent activity", ui.timeline(myAudit.map((a) => ({ ts: a.ts, title: esc(a.summary) })))) +
+      ui.sectionCard("Workspace", `<p class="muted">Demo data lives in your browser. Resetting restores the seeded company state.</p>
+        <button class="btn btn-danger-ghost" id="resetDb">Reset workspace data</button>`) +
+      `</div></div>`;
+    el.querySelector("#reqTO").addEventListener("click", () => ui.formModal("Request time off", [
+      { name: "type", label: "Type", type: "select", options: ["Vacation", "Sick", "Personal"] },
+      { name: "startDays", label: "Starts in (days)", type: "number", required: true, value: 14 },
+      { name: "days", label: "Number of days", type: "number", required: true, value: 1 },
+      { name: "reason", label: "Reason (optional)", span2: true },
+    ], (v, close) => {
+      const start = Date.now() + (+v.startDays) * U.DAY;
+      const t = S.create("timeoff", { userId: S.meId, type: v.type, start, end: start + (+v.days - 1) * U.DAY, days: +v.days, status: "pending", reason: v.reason || "" }, "Requested time off — " + v.days + "d " + v.type);
+      S.db.approvals.push({ id: S.uid("ap"), type: "timeoff", title: "Time off — " + me.name + ", " + v.days + " day" + (v.days > 1 ? "s" : ""), refType: "timeoff", refId: t.id, requestedBy: S.meId, requestedAt: Date.now(), status: "pending", priority: "low", approverRoles: ["dept_head:" + me.dept], decisions: [], description: v.type + " starting " + U.date(start) });
+      S.notify([S.deptHeadId(me.dept)].filter(Boolean), "hr", "Time off request: " + me.name, v.days + "d " + v.type, "#/approvals");
+      S.save(); close(); ui.toast("Request submitted for approval.", "good"); OM.router.refresh();
+    }));
+    el.querySelector("#resetDb").addEventListener("click", () => ui.confirmModal("Reset workspace", "This restores the original seeded company data and removes your local changes. Continue?", () => {
+      S.reset(); location.reload();
+    }, { danger: true, okLabel: "Reset" }));
+  };
+
+  function permSummary(me) {
+    const checks = [
+      ["View executive workspace", S.moduleAccess("exec", me)],
+      ["View finance", S.moduleAccess("finance", me)],
+      ["View HR", S.moduleAccess("hr", me)],
+      ["Access sales CRM", S.moduleAccess("sales", me)],
+      ["Approve requests", S.can("approve", "approval", null, me)],
+      ["Delete records", me.role !== "intern" && me.role !== "contractor"],
+      ["Export data", S.can("export", "document", null, me)],
+      ["View audit log", S.can("view", "audit", null, me)],
+    ];
+    return checks.map(([label, ok]) => `<div class="perm-row ${ok ? "ok" : ""}"><span>${ok ? "✓" : "✕"}</span>${esc(label)}</div>`).join("") +
+      `<p class="muted footnote">Permissions are enforced in the data layer — every allowed and denied action is written to the audit ledger.</p>`;
+  }
+})();

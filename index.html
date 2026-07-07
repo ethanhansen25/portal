@@ -1,96 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CEO Hub</title>
-<link rel="stylesheet" href="styles.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Oakframe Media OS — the internal operating system for Oakframe Media." />
+  <title>Oakframe Media OS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400..700&family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/portal.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23c9a227'/%3E%3Ctext x='16' y='23' font-family='Georgia' font-size='20' font-weight='bold' text-anchor='middle' fill='%23141003'%3EO%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
-  <div class="app">
-
-    <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark">CH</div>
-        <div>
-          <h1>CEO Hub</h1>
-          <p id="dateline" class="dateline"></p>
-        </div>
-      </div>
-      <div class="stats" id="stats">
-        <div class="stat">
-          <span class="stat-num" id="statActive">0</span>
-          <span class="stat-label">Active</span>
-        </div>
-        <div class="stat">
-          <span class="stat-num" id="statDone">0</span>
-          <span class="stat-label">Done</span>
-        </div>
-        <div class="stat">
-          <span class="stat-num" id="statUrgent">0</span>
-          <span class="stat-label">Urgent</span>
-        </div>
-      </div>
-    </header>
-
-    <main class="layout">
-
-      <section class="panel actions-panel">
-        <div class="panel-head">
-          <h2>Quick Actions</h2>
-          <p>Click any item to add it to your to‑do list.</p>
-        </div>
-
-        <div class="action-groups" id="actionGroups"></div>
-
-        <form class="custom-form" id="customForm">
-          <h3>Add something else</h3>
-          <div class="custom-row">
-            <input type="text" id="customText" placeholder="Anything you need to do or track..." autocomplete="off" required />
-            <select id="customCategory"></select>
-            <select id="customPriority">
-              <option value="high">High</option>
-              <option value="medium" selected>Medium</option>
-              <option value="low">Low</option>
-            </select>
-            <button type="submit" class="btn btn-primary">Add</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="panel list-panel">
-        <div class="panel-head list-head">
-          <h2>To‑Do List</h2>
-          <div class="filters" id="filters">
-            <button class="filter-btn active" data-filter="all">All</button>
-            <button class="filter-btn" data-filter="active">Active</button>
-            <button class="filter-btn" data-filter="done">Completed</button>
-          </div>
-        </div>
-
-        <div class="sort-row">
-          <label for="sortBy">Sort by</label>
-          <select id="sortBy">
-            <option value="priority">Priority</option>
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-            <option value="category">Category</option>
-          </select>
-          <button class="btn btn-ghost" id="clearDone">Clear completed</button>
-        </div>
-
-        <ul id="todoList" class="todo-list"></ul>
-
-        <p id="emptyState" class="empty-state">No tasks yet — click a quick action to get started.</p>
-      </section>
-
-    </main>
-
-    <footer class="footer">
-      <span>Stored locally in this browser. Nothing leaves your device.</span>
-    </footer>
-  </div>
-
-<script src="app.js"></script>
+  <noscript>Oakframe Media OS requires JavaScript.</noscript>
+  <script src="js/data.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/pages_core.js"></script>
+  <script src="js/pages_sales.js"></script>
+  <script src="js/pages_ops.js"></script>
+  <script src="js/pages_exec.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>
