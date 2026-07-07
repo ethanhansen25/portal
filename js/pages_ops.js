@@ -289,18 +289,47 @@
     const rev = S.db.reviews.filter((r) => r.userId === u.id);
     const to = S.db.timeOff.filter((t) => t.userId === u.id);
     const acts = S.db.hrActions.filter((a) => a.userId === u.id);
-    ui.modal(u.name, `
+    const me = S.me();
+    const canEdit = S.isExec(me) || me.dept === "Human Resources";
+    const m = ui.modal(u.name, `
       <div class="detail-grid">
-        <div><span class="detail-label">Title</span><b>${esc(u.title)}</b></div>
+        <div><span class="detail-label">Title</span><b>${esc(u.title || "—")}</b></div>
         <div><span class="detail-label">Department</span><b>${esc(u.dept)}</b></div>
         <div><span class="detail-label">Role</span><b>${OM.ROLES[u.role].label}</b></div>
         <div><span class="detail-label">Hired</span><b>${U.date(u.hireDate)}</b></div>
         <div><span class="detail-label">Compensation</span><b>${u.salary ? U.money(u.salary) + "/yr" : u.rate ? "$" + u.rate + "/hr" : "—"}</b></div>
         <div><span class="detail-label">Contact</span><b>${esc(u.email)}</b></div>
       </div>
+      ${u.role === "intern" && u.dept === "Unassigned" ? `<div class="inline-note">This member hasn't been placed yet. Assign their role and department to give them the right access.</div>` : ""}
       <h4 class="modal-sub">Reviews</h4>${rev.map((r) => `<div class="list-row"><span class="list-main">${esc(r.period)} — score <b>${r.score}</b></span><span class="muted">${esc(r.summary)}</span></div>`).join("") || '<p class="muted">None.</p>'}
       <h4 class="modal-sub">Time off</h4>${to.map((t) => `<div class="list-row"><span class="list-main">${esc(t.type)} · ${U.dateShort(t.start)} → ${U.dateShort(t.end)}</span>${ui.badge(t.status)}</div>`).join("") || '<p class="muted">None.</p>'}
-      ${acts.length ? `<h4 class="modal-sub">Records</h4>` + acts.map((a) => `<div class="list-row"><span class="list-main">${U.cap(a.type)} — ${esc(a.summary)}</span>${ui.badge(a.status)}</div>`).join("") : ""}`, { wide: true });
+      ${acts.length ? `<h4 class="modal-sub">Records</h4>` + acts.map((a) => `<div class="list-row"><span class="list-main">${U.cap(a.type)} — ${esc(a.summary)}</span>${ui.badge(a.status)}</div>`).join("") : ""}`,
+      { wide: true, footer: canEdit ? `<button class="btn btn-ghost" data-role="cancel2">Close</button><button class="btn btn-gold" id="editMember">Edit member</button>` : "" });
+    if (canEdit) {
+      const c2 = m.el.querySelector('[data-role="cancel2"]'); if (c2) c2.addEventListener("click", m.close);
+      m.el.querySelector("#editMember").addEventListener("click", () => { m.close(); editMemberModal(u); });
+    }
+  }
+
+  function editMemberModal(u) {
+    const me = S.me();
+    const canPay = S.isExec(me) || me.dept === "Finance";
+    const fields = [
+      { name: "name", label: "Name", value: u.name, required: true },
+      { name: "title", label: "Title", value: u.title || "" },
+      { name: "dept", label: "Department", type: "select", value: u.dept, options: ["Executive", "Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration", "Contractors", "Unassigned"] },
+      { name: "role", label: "Role", type: "select", value: u.role, options: Object.entries(OM.ROLES).map(([k, v]) => [k, v.label]) },
+      { name: "status", label: "Status", type: "select", value: u.status, options: [["active", "Active"], ["offboarded", "Offboarded"]] },
+    ];
+    if (canPay) {
+      fields.push({ name: "salary", label: "Annual salary ($)", type: "number", value: u.salary || "", hint: "Leave blank if hourly / contractor" });
+      fields.push({ name: "rate", label: "Hourly rate ($)", type: "number", value: u.rate || "", hint: "For contractors" });
+    }
+    ui.formModal("Edit " + u.name, fields, (v, close) => {
+      S.updateProfile(u.id, { name: v.name, title: v.title, dept: v.dept, role: v.role, status: v.status }, "Placed " + v.name + " as " + OM.ROLES[v.role].label + " · " + v.dept);
+      if (canPay && (v.salary !== "" || v.rate !== "")) S.setCompensation(u.id, v.salary !== "" ? +v.salary : null, v.rate !== "" ? +v.rate : null);
+      close(); ui.toast(v.name + " updated.", "good"); OM.router.refresh();
+    }, { wide: true });
   }
 
   /* ================= EQUIPMENT ================= */

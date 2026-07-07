@@ -558,6 +558,29 @@
       return ap;
     },
 
+    // HR/exec place a member into their role, department, title, and status.
+    // The profiles UPDATE policy + enforce_profile_update trigger enforce this
+    // server-side; this is the client affordance + audit trail.
+    updateProfile(userId, patch, summary) {
+      const me = S.me();
+      if (!(S.isExec(me) || me.dept === "Human Resources")) throw new Error("Only HR or an executive can edit team members.");
+      const u = S.user(userId); if (!u) throw new Error("Member not found.");
+      const prev = { role: u.role, dept: u.dept, title: u.title, status: u.status };
+      Object.assign(u, patch);
+      S.audit("manage", "employee", userId, summary || ("Updated member — " + u.name), { prev: JSON.stringify(prev).slice(0, 300), next: JSON.stringify(patch).slice(0, 300) });
+      if (patch.role || patch.dept) S.notify(userId, "hr", "Your access was updated", "You're now " + OM.ROLES[u.role].label + " in " + u.dept + ".", "#/settings");
+      S._bg(OM.db.patch("user", userId, patch), "Update member", ["users"]);
+      return u;
+    },
+    // Compensation is Finance/exec only and lives in its own table.
+    setCompensation(userId, salary, rate) {
+      const me = S.me();
+      if (!(S.isExec(me) || me.dept === "Finance")) throw new Error("Only Finance or an executive can set compensation.");
+      const u = S.user(userId); if (u) { u.salary = salary != null ? salary : u.salary; u.rate = rate != null ? rate : u.rate; }
+      S.audit("manage", "compensation", userId, "Updated compensation — " + (u ? u.name : userId));
+      S._bg(OM.db.from("compensation").upsert({ profile_id: userId, salary: salary != null ? salary : null, hourly_rate: rate != null ? rate : null }), "Set compensation", ["users"]);
+    },
+
     decideTimeOff(id, status) {
       const t = S.find("timeoff", id);
       S.assertCan("approve", "timeoff", t);

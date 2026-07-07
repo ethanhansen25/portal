@@ -222,6 +222,17 @@
       });
       await Promise.all(jobs);
 
+      // Merge compensation onto the employee records. It's a separate table
+      // (RLS returns only the rows the viewer may see: Finance/exec/self), so
+      // salaries a user isn't cleared for simply stay undefined and render as
+      // "—" rather than leaking through the company-wide directory read.
+      try {
+        const { data: comp } = await DB.client.from("compensation").select("*");
+        const byId = {};
+        (comp || []).forEach((c) => (byId[c.profile_id] = c));
+        (out.users || []).forEach((u) => { const c = byId[u.id]; if (c) { u.salary = c.salary; u.rate = c.hourly_rate; } });
+      } catch (e) { /* compensation not visible to this role — expected */ }
+
       // derive presence: active in the last 4 minutes
       const cutoff = Date.now() - 4 * 60000;
       (out.users || []).forEach((u) => { u.online = !!(u.lastActiveAt && u.lastActiveAt > cutoff); });

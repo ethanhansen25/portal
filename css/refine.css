@@ -160,6 +160,8 @@ body {
 .gs-kbd { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--muted); border: 1px solid var(--hairline-strong); border-radius: 6px; padding: 2px 7px; pointer-events: none; }
 .global-search input { padding-right: 46px; cursor: pointer; }
 
+.inline-note { margin: 14px 0 2px; padding: 11px 14px; border-radius: 11px; background: var(--gold-dim); border: 1px solid rgba(201,162,39,.28); color: var(--gold-bright); font-size: 12.5px; }
+
 /* ============ EMPTY STATES ============ */
 .empty-block { padding: 54px 20px; }
 .empty-illus { width: 76px; height: 76px; margin: 0 auto 16px; border-radius: 20px; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 40% 30%, rgba(201,162,39,.16), var(--glass)); border: 1px solid var(--hairline); color: var(--gold-bright); font-size: 30px; }
