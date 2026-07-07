@@ -107,6 +107,11 @@
 
 .kpi-value { font-size: 27px; }
 
+/* Onboarding checklist ------------------------------------------------------ */
+.onboard-progress { display: flex; align-items: center; gap: 10px; padding: 2px 14px 12px; }
+.onboard-item { cursor: pointer; }
+.onboard-item input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--gold); cursor: pointer; }
+
 @media (max-width: 900px) {
   .auth { grid-template-columns: 1fr; }
   .auth-aside { display: none; }

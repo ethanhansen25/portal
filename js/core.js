@@ -294,7 +294,14 @@
         }
         case "candidate": case "review": case "hrAction": case "employee": {
           if (dept !== "Human Resources") {
-            if (entity === "review" && rec && (own(rec, "userId") || own(rec, "reviewerId"))) return action === "view" || (action === "edit" && own(rec, "reviewerId"));
+            if (entity === "review") {
+              if (rec && (own(rec, "userId") || own(rec, "reviewerId"))) return action === "view" || (action === "edit" && own(rec, "reviewerId"));
+              if (role === "dept_head" && (action === "create" || action === "view")) return true;
+              // Assigned managers may write a review for their own direct report.
+              const target = rec && rec.userId && S.find("user", rec.userId);
+              if ((action === "create" || action === "view") && target && target.managerId === u.id) return true;
+              return false;
+            }
             if (entity === "candidate" && role === "dept_head") return action === "view";
             return false;
           }
@@ -454,6 +461,8 @@
         await OM.db.from("invoice_items").insert(data.items.map((it) => ({ invoice_id: data.id, description: it.desc, qty: it.qty, rate: it.rate })));
       } else if (entity === "initiative" && (data.keyResults || []).length) {
         await OM.db.from("key_results").insert(data.keyResults.map((k) => ({ initiative_id: data.id, text: k.text, done: k.done || 0, target: k.target || 1 })));
+      } else if (entity === "onboardingTemplate" && (data.tasks || []).length) {
+        await OM.db.from("onboarding_template_tasks").insert(data.tasks.map((t, i) => ({ template_id: data.id, text: t.text, category: t.category || "general", position: i })));
       }
     },
 
@@ -600,6 +609,19 @@
         });
         await S.resync("users", "projects", "onboardingAssignments", "notifications");
       })();
+    },
+
+    // Acknowledging is the reviewed employee's own action, distinct from the
+    // reviewer's edit rights — narrower than the generic update() permission
+    // check, so it gets its own assertion rather than reusing can("edit").
+    acknowledgeReview(id) {
+      const me = S.me();
+      const r = S.find("review", id);
+      if (!r || r.userId !== me.id) throw new Error("You can only acknowledge your own review.");
+      if (r.status !== "approved") throw new Error("This review hasn't been finalized yet.");
+      r.acknowledgedAt = Date.now();
+      S.audit("edit", "review", id, "Acknowledged review" + (r.period ? " — " + r.period : ""));
+      S._bg(OM.db.patch("review", id, { acknowledgedAt: r.acknowledgedAt }), "Acknowledge review", ["reviews"]);
     },
 
     // ---------- onboarding ----------

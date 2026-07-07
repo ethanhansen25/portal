@@ -19,6 +19,8 @@
     const hour = new Date().getHours();
     const greet = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
+    const myOnboarding = S.db.onboardingAssignments.find((a) => a.profileId === me.id && !a.approvedAt);
+
     let salesBlock = "";
     if (me.dept === "Sales" || S.isExec(me)) {
       const myLeads = S.db.leads.filter((l) => (S.isExec(me) || l.assignedTo === me.id) && !["won", "lost", "archived"].includes(l.stage));
@@ -35,7 +37,8 @@
     }
 
     el.innerHTML = ui.pageHead(`${greet}, ${esc(me.name.split(" ")[0])}`,
-      `${esc(me.title)} · ${esc(me.dept)} · ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`) +
+      [me.title, me.dept, new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })].filter(Boolean).map(esc).join(" · ")) +
+      (myOnboarding ? onboardingCard(myOnboarding) : "") +
       ui.kpi([
         { label: "My open tasks", value: myTasks.length, sub: overdueTasks.length ? `<span class="tone-text-bad">${overdueTasks.length} overdue</span>` : "All on schedule", link: "#/tasks" },
         { label: "Active projects", value: myProjects.length, sub: myProjects.filter((p) => p.health !== "on_track").length + " need attention", link: "#/projects" },
@@ -59,7 +62,29 @@
             </div>`).join("") : ui.empty("You're not on any active projects."))}
         </div>
       </div>`;
+    if (myOnboarding) bindOnboardingCard(el);
   };
+
+  // Self-service onboarding checklist shown on Home until HR gives final
+  // approval — each item is owned by the employee (or HR/exec) per
+  // complete_onboarding_task()'s authorization check.
+  function onboardingCard(a) {
+    const tasks = (a.tasks || []).slice().sort((x, y) => x.position - y.position);
+    const done = tasks.filter((t) => t.done).length;
+    return ui.sectionCard("Your onboarding checklist", `
+      <div class="onboard-progress"><span class="muted">${done} of ${tasks.length} complete</span>${ch.meter(tasks.length ? Math.round((done / tasks.length) * 100) : 0)}</div>
+      ${tasks.map((t) => `
+        <label class="list-row onboard-item"><input type="checkbox" data-onb-task="${t.id}" ${t.done ? "checked" : ""}>
+          <span class="list-main"><b>${esc(t.text)}</b><span class="muted">${U.cap(t.category || "general")}</span></span>
+        </label>`).join("")}
+      ${done === tasks.length && tasks.length ? `<div class="inline-note">All done — waiting on HR's final onboarding approval.</div>` : ""}
+    `, { cls: "onboard-card" });
+  }
+  function bindOnboardingCard(el) {
+    el.querySelectorAll("[data-onb-task]").forEach((cb) => cb.addEventListener("change", () => {
+      S.completeOnboardingTask(cb.dataset.onbTask, cb.checked).then(() => OM.router.refresh()).catch((e) => ui.toast(e.message, "bad"));
+    }));
+  }
 
   function taskRow(t) {
     const p = t.projectId && S.find("project", t.projectId);
