@@ -1,17 +1,40 @@
 /* Oakframe Media OS — SVG chart engine.
-   Palette validated with the dataviz six-checks validator against surface #ffffff
-   (all PASS; worst adjacent CVD ΔE 46.9). Categorical order is fixed, never cycled. */
+   Two palettes, each separately validated with the dataviz six-checks
+   validator against their own surface (light #ffffff: all PASS, worst
+   adjacent CVD ΔE 46.9 · dark #15151a: all PASS, worst adjacent CVD ΔE 21.3).
+   Categorical order is fixed within each palette, never cycled. Charts are
+   drawn as raw SVG (not CSS custom properties), so the active theme is read
+   fresh at the top of every draw call via syncPalette(). */
 (function () {
   const OM = (window.OM = window.OM || {});
   const U = OM.util;
 
-  // Categorical palette validated for a white surface (dataviz six-checks, all
-  // PASS; worst adjacent CVD ΔE 46.9). Gold leads to stay on-brand; the rest
-  // are distinct hues in a CVD-safe fixed order. Never cycled.
-  const SERIES = ["#b8860b", "#2a6fdb", "#1a9e6d", "#7a4bc4", "#d4483f", "#2d9bb5", "#d16a2c", "#c13a86"];
-  const INK = { primary: "#1b1a17", secondary: "#56544e", muted: "#8f8c85", grid: "#eceae4", baseline: "#ddd9d0" };
-  const STATUS = { good: "#1a7f4b", warning: "#b6791a", serious: "#d16a2c", critical: "#c1362f" };
-  const SURFACE = "#ffffff";
+  const PALETTES = {
+    light: {
+      SERIES: ["#b8860b", "#2a6fdb", "#1a9e6d", "#7a4bc4", "#d4483f", "#2d9bb5", "#d16a2c", "#c13a86"],
+      INK: { primary: "#1b1a17", secondary: "#56544e", muted: "#8f8c85", grid: "#eceae4", baseline: "#ddd9d0" },
+      STATUS: { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" }, // fixed, never themed (dataviz skill palette.md)
+      SURFACE: "#ffffff",
+    },
+    dark: {
+      SERIES: ["#b98a2e", "#3987e5", "#199e70", "#9085e9", "#e66767", "#38a3c4", "#d55181", "#d95926"],
+      INK: { primary: "#f4f1e8", secondary: "#b9b6ac", muted: "#8b8a94", grid: "#26262c", baseline: "#3a3a42" },
+      STATUS: { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" },
+      SURFACE: "#14141a",
+    },
+  };
+  const SERIES = [];
+  const INK = {};
+  const STATUS = {};
+  let SURFACE;
+  function syncPalette() {
+    const p = PALETTES[document.documentElement.dataset.theme === "dark" ? "dark" : "light"];
+    SERIES.length = 0; SERIES.push(...p.SERIES);
+    Object.assign(INK, p.INK);
+    Object.assign(STATUS, p.STATUS);
+    SURFACE = p.SURFACE;
+  }
+  syncPalette();
 
   let tipEl = null;
   function tip() {
@@ -54,6 +77,7 @@
   /* ---- Multi-series line chart with crosshair tooltip ----
      data: { labels: [...], series: [{name, values:[...]}], money:true } */
   function line(el, data, opts = {}) {
+    syncPalette();
     const W = el.clientWidth || 560, H = opts.height || 220;
     const padL = 46, padR = 14, padT = 12, padB = 26;
     const iw = W - padL - padR, ih = H - padT - padB;
@@ -116,6 +140,7 @@
 
   /* ---- Grouped/single bar chart ---- */
   function bars(el, data, opts = {}) {
+    syncPalette();
     const W = el.clientWidth || 560, H = opts.height || 220;
     const padL = 46, padR = 10, padT = 12, padB = 26;
     const iw = W - padL - padR, ih = H - padT - padB;
@@ -160,6 +185,7 @@
 
   /* ---- Horizontal bars (single series, magnitude) with direct value labels ---- */
   function hbars(el, items, opts = {}) {
+    syncPalette();
     // items: [{label, value, color?, sub?}]
     const max = Math.max(1, ...items.map((i) => i.value));
     el.innerHTML = '<div class="hbars">' + items.map((it, idx) => {
@@ -175,6 +201,7 @@
 
   /* ---- Donut with 2px surface gaps + legend ---- */
   function donut(el, items, opts = {}) {
+    syncPalette();
     const size = opts.size || 168, r = size / 2 - 6, cx = size / 2, cy = size / 2, sw = opts.thickness || 22;
     const total = items.reduce((s, i) => s + i.value, 0) || 1;
     let a0 = -Math.PI / 2;
@@ -212,7 +239,9 @@
   }
 
   /* ---- Sparkline for stat tiles ---- */
-  function spark(values, color = SERIES[0], w = 92, h = 28) {
+  function spark(values, color, w = 92, h = 28) {
+    syncPalette();
+    color = color || SERIES[0];
     const max = Math.max(...values, 1), min = Math.min(...values, 0);
     const n = values.length;
     const x = (i) => (i / (n - 1)) * (w - 4) + 2;
@@ -223,6 +252,7 @@
 
   /* ---- Simple progress meter ---- */
   function meter(pct, opts = {}) {
+    syncPalette();
     const v = Math.max(0, Math.min(100, pct));
     const color = opts.color || (v >= 90 ? STATUS.critical : v >= 75 ? STATUS.warning : SERIES[0]);
     return `<div class="meter"><div class="meter-fill" style="width:${v}%;background:${color}"></div></div>`;

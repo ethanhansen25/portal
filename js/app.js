@@ -127,6 +127,7 @@
               <input type="text" id="gSearch" placeholder="Search people, clients, projects, leads, documents…" autocomplete="off"><span class="gs-kbd">⌘K</span>
               <div class="gs-results" id="gsResults"></div>
             </div>
+            <button class="icon-btn" id="themeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? "☀" : "☾"}</button>
             <button class="icon-btn bell" id="bellBtn" title="Notifications">◉<span class="bell-count" id="bellCount"></span></button>
             <div class="user-menu-wrap">
               <button class="icon-btn" id="userBtn">${ui.avatar(me)}</button>
@@ -165,6 +166,10 @@
   function bindShell() {
     document.getElementById("burger").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
     document.getElementById("bellBtn").addEventListener("click", () => (location.hash = "#/notifications"));
+    document.getElementById("themeBtn").addEventListener("click", (e) => {
+      OM.theme.toggle();
+      e.currentTarget.textContent = OM.theme.get() === "dark" ? "☀" : "☾";
+    });
     const userBtn = document.getElementById("userBtn");
     const menu = document.getElementById("userMenu");
     userBtn.addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("open"); });
@@ -316,6 +321,7 @@
     document.body.className = "auth-body";
     document.body.innerHTML = `
       <div class="auth">
+        <button class="icon-btn auth-theme-btn" id="authThemeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? "☀" : "☾"}</button>
         <div class="auth-aside">
           <div class="auth-brand"><div class="brand-mark xl">O</div><span>Oakframe Media</span></div>
           <div class="auth-pitch">
@@ -355,6 +361,7 @@
         </div>
       </div>`;
 
+    document.getElementById("authThemeBtn").addEventListener("click", () => { OM.theme.toggle(); renderLogin(); });
     const err = document.getElementById("authError");
     const swap = (mode) => { authMode = mode; renderLogin(); setTimeout(() => { const f = document.getElementById(authMode === "signup" ? "authName" : "authEmail"); if (f) f.focus(); }, 20); };
     const toSignup = document.getElementById("toSignup"); if (toSignup) toSignup.addEventListener("click", () => swap("signup"));
