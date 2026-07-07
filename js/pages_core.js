@@ -650,8 +650,10 @@
     const cMeetings = S.db.meetings.filter((m) => m.clientId === c.id);
     const cContracts = S.db.contracts.filter((k) => k.clientId === c.id);
     const cProposals = S.db.proposals.filter((k) => k.clientId === c.id);
+    const cClientMessages = S.db.clientMessages.filter((m) => m.clientId === c.id);
     const showFinance = S.isExec(me) || S.moduleAccess("finance") || me.dept === "Sales";
     const canSeeContracts = S.can("view", "contract", { projectId: null }) || cProjects.some((p) => S.can("view", "contract", { projectId: p.id }));
+    const canMessageClient = S.isExec(me) || c.ownerId === me.id || cProjects.some((p) => p.leadId === me.id || (p.team || []).includes(me.id));
     const revenueYTD = M.revenueByClientYTD().find((r) => r.client.id === c.id);
 
     el.innerHTML = ui.pageHead(esc(c.name),
@@ -665,6 +667,7 @@
       showFinance ? { id: "invoices", label: "Invoices", count: cInvoices.length } : null,
       canSeeContracts ? { id: "contracts", label: "Contracts & Proposals", count: cContracts.length + cProposals.length } : null,
       { id: "comms", label: "Communications", count: cComms.length },
+      (canMessageClient || cClientMessages.length) ? { id: "clientmsgs", label: "Client Portal Messages", count: cClientMessages.filter((m) => !m.readAt && m.recipientId === me.id).length } : null,
       { id: "files", label: "Files", count: cDocs.length }, { id: "notes", label: "Notes" },
     ].filter(Boolean);
     ui.tabs(el.querySelector("#ctabs"), tabDefs, tab, (t) => (location.hash = "#/client/" + id + "/" + t));
@@ -715,6 +718,8 @@
       });
     } else if (tab === "contracts") {
       renderContractsProposals(body, c, cContracts, cProposals, cProjects);
+    } else if (tab === "clientmsgs") {
+      renderClientMessagesPanel(body, c, canMessageClient);
     } else if (tab === "comms") {
       renderCommsPanel(body, () => S.db.comms.filter((x) => x.clientId === c.id), { clientId: c.id });
     } else if (tab === "files") {
@@ -757,6 +762,41 @@
     const me = S.me();
     if ((status === "internal_review" && (next === "approved_to_send" || next === "approved"))) return S.isExec(me);
     return true;
+  }
+
+  // Staff-side view of the client_messages thread the client portal writes
+  // to (js/pages_client.js CP.pages.messages) — otherwise a client's message
+  // is only reachable via a raw query, invisible to anyone in the staff app.
+  function renderClientMessagesPanel(body, c, canReply) {
+    const me = S.me();
+    const clientUsers = S.db.users.filter((u) => u.portalType === "client" && u.clientId === c.id);
+    let activeContact = clientUsers[0] ? clientUsers[0].id : null;
+    function draw() {
+      const thread = activeContact ? S.db.clientMessages.filter((m) => m.clientId === c.id && (m.senderId === activeContact || m.recipientId === activeContact)).sort((a, b) => a.createdAt - b.createdAt) : [];
+      body.innerHTML = `<div class="grid-2" style="grid-template-columns:220px 1fr">
+        <div class="card card-flush">${clientUsers.map((u) => `<div class="list-row clickable ${u.id === activeContact ? "active-contact" : ""}" data-c="${u.id}">${ui.avatar(u)}<span class="list-main"><b>${esc(u.name)}</b></span></div>`).join("") || ui.empty("No client portal users yet.")}</div>
+        <div>
+          <div class="card" style="max-height:440px;overflow-y:auto">${thread.map((m) => `<div class="comment"><div><div class="comment-head"><b>${esc(S.userName(m.senderId))}</b><span class="muted">${U.ago(m.createdAt)}</span></div><div class="comment-body">${esc(m.body)}</div></div></div>`).join("") || ui.empty(activeContact ? "No messages yet." : "Select a contact.")}</div>
+          ${activeContact && canReply ? `<div class="inline-add"><input type="text" id="cmBody" placeholder="Reply…"><button class="btn btn-gold btn-sm" id="cmSend">Send</button></div>` : ""}
+        </div>
+      </div>`;
+      body.querySelectorAll("[data-c]").forEach((r) => r.addEventListener("click", () => {
+        activeContact = r.dataset.c;
+        S.db.clientMessages.filter((m) => m.recipientId === me.id && m.senderId === activeContact && !m.readAt).forEach((m) => S.update("clientMessage", m.id, { readAt: Date.now() }, "Read client message"));
+        draw();
+      }));
+      const sendBtn = body.querySelector("#cmSend");
+      if (sendBtn) sendBtn.addEventListener("click", () => {
+        const input = body.querySelector("#cmBody");
+        const val = input.value.trim();
+        if (!val) return;
+        try {
+          S.create("clientMessage", { clientId: c.id, senderId: me.id, recipientId: activeContact, body: val }, "Replied to " + S.userName(activeContact));
+          draw();
+        } catch (e) { ui.toast(e.message, "bad"); }
+      });
+    }
+    draw();
   }
 
   function renderContractsProposals(body, c, contracts, proposals, projects) {
