@@ -19,6 +19,8 @@
     const hour = new Date().getHours();
     const greet = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
+    const myOnboarding = S.db.onboardingAssignments.find((a) => a.profileId === me.id && !a.approvedAt);
+
     let salesBlock = "";
     if (me.dept === "Sales" || S.isExec(me)) {
       const myLeads = S.db.leads.filter((l) => (S.isExec(me) || l.assignedTo === me.id) && !["won", "lost", "archived"].includes(l.stage));
@@ -35,7 +37,8 @@
     }
 
     el.innerHTML = ui.pageHead(`${greet}, ${esc(me.name.split(" ")[0])}`,
-      `${esc(me.title)} · ${esc(me.dept)} · ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`) +
+      [me.title, me.dept, new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })].filter(Boolean).map(esc).join(" · ")) +
+      (myOnboarding ? onboardingCard(myOnboarding) : "") +
       ui.kpi([
         { label: "My open tasks", value: myTasks.length, sub: overdueTasks.length ? `<span class="tone-text-bad">${overdueTasks.length} overdue</span>` : "All on schedule", link: "#/tasks" },
         { label: "Active projects", value: myProjects.length, sub: myProjects.filter((p) => p.health !== "on_track").length + " need attention", link: "#/projects" },
@@ -59,7 +62,29 @@
             </div>`).join("") : ui.empty("You're not on any active projects."))}
         </div>
       </div>`;
+    if (myOnboarding) bindOnboardingCard(el);
   };
+
+  // Self-service onboarding checklist shown on Home until HR gives final
+  // approval — each item is owned by the employee (or HR/exec) per
+  // complete_onboarding_task()'s authorization check.
+  function onboardingCard(a) {
+    const tasks = (a.tasks || []).slice().sort((x, y) => x.position - y.position);
+    const done = tasks.filter((t) => t.done).length;
+    return ui.sectionCard("Your onboarding checklist", `
+      <div class="onboard-progress"><span class="muted">${done} of ${tasks.length} complete</span>${ch.meter(tasks.length ? Math.round((done / tasks.length) * 100) : 0)}</div>
+      ${tasks.map((t) => `
+        <label class="list-row onboard-item"><input type="checkbox" data-onb-task="${t.id}" ${t.done ? "checked" : ""}>
+          <span class="list-main"><b>${esc(t.text)}</b><span class="muted">${U.cap(t.category || "general")}</span></span>
+        </label>`).join("")}
+      ${done === tasks.length && tasks.length ? `<div class="inline-note">All done — waiting on HR's final onboarding approval.</div>` : ""}
+    `, { cls: "onboard-card" });
+  }
+  function bindOnboardingCard(el) {
+    el.querySelectorAll("[data-onb-task]").forEach((cb) => cb.addEventListener("change", () => {
+      S.completeOnboardingTask(cb.dataset.onbTask, cb.checked).then(() => OM.router.refresh()).catch((e) => ui.toast(e.message, "bad"));
+    }));
+  }
 
   function taskRow(t) {
     const p = t.projectId && S.find("project", t.projectId);
@@ -128,13 +153,15 @@
     const pInvoices = S.db.invoices.filter((i) => i.projectId === p.id);
     const pDocs = S.db.documents.filter((d) => d.projectId === p.id && S.can("view", "document", d));
     const pEquip = S.db.equipment.filter((e) => e.projectId === p.id);
+    const pDeliverables = S.db.deliverables.filter((d) => d.projectId === p.id);
     const hours = pTasks.reduce((s, t) => s + (t.timeEntries || []).reduce((a, e2) => a + e2.hours, 0), 0);
     const canManage = S.can("manage", "project", p);
     const showMoney = S.isExec(me) || S.moduleAccess("finance") || p.leadId === me.id || me.role === "dept_head";
 
     const tabDefs = [
       { id: "overview", label: "Overview" }, { id: "tasks", label: "Tasks", count: pTasks.filter((t) => t.status !== "done").length },
-      { id: "kanban", label: "Board" }, { id: "files", label: "Files & Contracts", count: pDocs.length },
+      { id: "kanban", label: "Board" }, { id: "deliverables", label: "Deliverables", count: pDeliverables.filter((d) => !["final_delivered", "archived"].includes(d.status)).length },
+      { id: "files", label: "Files & Contracts", count: pDocs.length },
       { id: "budget", label: "Budget & Hours" }, { id: "equipment", label: "Equipment", count: pEquip.length },
       { id: "timeline", label: "Timeline" }, { id: "team", label: "Team", count: (p.team || []).length },
     ];
@@ -165,6 +192,8 @@
       renderTaskTable(body, () => S.db.tasks.filter((t) => t.projectId === p.id), p);
     } else if (tab === "kanban") {
       renderTaskBoard(body, pTasks, p);
+    } else if (tab === "deliverables") {
+      renderDeliverables(body, p, pDeliverables);
     } else if (tab === "files") {
       body.innerHTML = `<div class="card card-flush" id="fileTbl"></div>`;
       ui.table(body.querySelector("#fileTbl"), {
@@ -241,6 +270,136 @@
       close(); ui.toast("Project updated.", "good"); OM.router.refresh();
     }, { wide: true }));
   };
+
+  /* ================= DELIVERABLES (staff-side approval chain) =================
+     draft -> internal_review -> dept_head_review -> approved_for_client ->
+     sent_to_client -> (client: client_approved | revision_requested) ->
+     final_delivered -> archived. Client visibility flips on at sent_to_client
+     (supabase/migrations/0007's deliverables_select_client policy) — staff
+     stages before that are never reachable by a client account regardless of
+     what this UI shows, since RLS enforces it independent of this code. */
+  const DELIVERABLE_KINDS = ["video", "photo", "graphic", "document", "draft", "final", "thumbnail", "caption", "revision"];
+  // Each entry: [nextStatus, buttonLabel, tone] — who may fire it is checked
+  // by S.can("edit","deliverable",d) plus a stage-specific role rule below.
+  const DELIVERABLE_NEXT = {
+    draft: [["internal_review", "Submit for internal review"]],
+    internal_review: [["dept_head_review", "Send to department head"], ["draft", "Send back to draft"]],
+    dept_head_review: [["approved_for_client", "Approve for client"], ["internal_review", "Send back"]],
+    approved_for_client: [["sent_to_client", "Send to client"]],
+    sent_to_client: [],
+    client_approved: [["final_delivered", "Mark final delivered"]],
+    revision_requested: [["internal_review", "Resubmit revision"]],
+    final_delivered: [["archived", "Archive"]],
+    archived: [],
+  };
+  // dept_head_review -> approved_for_client and anything -> sent_to_client
+  // require a department head / exec sign-off, mirroring "Department Head
+  // approves before client sees it" — narrower than the general edit right.
+  function canFireTransition(d, next) {
+    const me = S.me();
+    if (!S.can("edit", "deliverable", d)) return false;
+    if ((d.status === "dept_head_review" && next === "approved_for_client") || next === "sent_to_client") {
+      return S.isExec(me) || me.role === "dept_head";
+    }
+    return true;
+  }
+
+  function renderDeliverables(body, p, items) {
+    const canCreate = S.can("create", "deliverable", null);
+    body.innerHTML = `<div class="row-gap">${canCreate ? '<button class="btn btn-gold btn-sm" id="newDeliverable">+ New deliverable</button>' : ""}</div>
+      <div class="lib-grid" id="delGrid">${items.length ? items.map((d) => staffDeliverableCard(d)).join("") : ""}</div>`;
+    if (!items.length) body.querySelector("#delGrid").outerHTML = ui.empty("No deliverables on this project yet.");
+    const nd = body.querySelector("#newDeliverable");
+    if (nd) nd.addEventListener("click", () => newDeliverableModal(p));
+    body.querySelectorAll("[data-deliverable]").forEach((card) => card.addEventListener("click", (e) => {
+      if (e.target.closest("[data-open-file]")) return;
+      deliverableDetailModal(S.find("deliverable", card.dataset.deliverable));
+    }));
+    body.querySelectorAll("[data-open-file]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); OM.actions.openAttachment(S.find("deliverable", b.dataset.openFile).storagePath); }));
+  }
+
+  function staffDeliverableCard(d) {
+    return `<div class="card lib-card clickable" data-deliverable="${d.id}">
+      <div class="lib-top">${ui.badge(d.status)}<span class="muted">v${d.version}</span></div>
+      <b>${esc(d.name)}</b><span class="muted">${U.cap(d.kind)} · uploaded by ${esc(S.userName(d.uploadedBy))}</span>
+      ${d.dueDate ? `<span class="muted">Due ${U.dateShort(d.dueDate)}</span>` : ""}
+      ${d.storagePath ? `<div class="row-gap"><button class="btn btn-ghost btn-sm" data-open-file="${d.id}">⤓ File</button></div>` : ""}
+    </div>`;
+  }
+
+  function newDeliverableModal(p) {
+    ui.formModal("New deliverable", [
+      { name: "name", label: "Name", required: true, span2: true },
+      { name: "kind", label: "Kind", type: "select", options: DELIVERABLE_KINDS, value: "video" },
+      { name: "dueDays", label: "Due in (days)", type: "number" },
+      { name: "file", label: "File (optional — can add later)", type: "file" },
+      { name: "clientNotes", label: "Client-facing notes", type: "textarea", span2: true, hint: "Visible to the client once released" },
+    ], async (v, close) => {
+      const id = S.uid();
+      let storagePath = null, size = null;
+      if (v.file && v.file.size) { const up = await OM.db.uploadAttachment("deliverables", id, v.file); storagePath = up.path; size = up.size; }
+      S.create("deliverable", {
+        id, projectId: p.id, clientId: p.clientId || null, name: v.name, kind: v.kind, status: "draft", version: 1,
+        storagePath, notes: null, clientNotes: v.clientNotes || null, downloadPermission: false,
+        uploadedBy: S.meId, uploadedAt: Date.now(), dueDate: v.dueDays !== "" ? Date.now() + (+v.dueDays) * U.DAY : null,
+      }, "Added deliverable — " + v.name);
+      close(); ui.toast("Deliverable created.", "good"); OM.router.refresh();
+    }, { wide: true });
+  }
+
+  function deliverableDetailModal(d) {
+    if (!d) return;
+    const me = S.me();
+    const isHrOrExec = S.isExec(me) || me.role === "dept_head";
+    const internalNotes = S.db.deliverableInternalNotes.filter((n) => n.deliverableId === d.id);
+    const events = S.db.deliverableEvents.filter((e) => e.deliverableId === d.id).sort((a, b) => b.ts - a.ts);
+    const nextOptions = (DELIVERABLE_NEXT[d.status] || []).filter(([next]) => canFireTransition(d, next));
+    const m = ui.modal(d.name, `
+      <div class="detail-grid">
+        <div><span class="detail-label">Status</span><b>${ui.badge(d.status)}</b></div>
+        <div><span class="detail-label">Kind</span><b>${U.cap(d.kind)}</b></div>
+        <div><span class="detail-label">Version</span><b>v${d.version}</b></div>
+        <div><span class="detail-label">Uploaded by</span><b>${esc(S.userName(d.uploadedBy))}</b></div>
+      </div>
+      ${d.storagePath ? `<div class="row-gap"><button class="btn btn-ghost btn-sm" id="dlOpenFile">⤓ Open file</button></div>` : '<p class="muted">No file attached yet.</p>'}
+      <h4 class="modal-sub">Client-facing notes</h4>
+      <textarea id="dlClientNotes" class="body-text" rows="3" style="width:100%">${esc(d.clientNotes || "")}</textarea>
+      <div class="row-gap"><button class="btn btn-ghost btn-sm" id="dlSaveNotes">Save client notes</button></div>
+      <h4 class="modal-sub">Internal notes <span class="muted">— never visible to the client</span></h4>
+      ${internalNotes.map((n) => `<div class="list-row"><span class="list-main"><span class="muted">${esc(S.userName(n.authorId))} · ${U.date(n.createdAt)}</span><br>${esc(n.body)}</span></div>`).join("") || '<p class="muted">None.</p>'}
+      <div class="row-gap"><input type="text" id="dlNoteInput" placeholder="Add an internal note…" style="flex:1"><button class="btn btn-ghost btn-sm" id="dlAddNote">Add</button></div>
+      ${events.length ? `<h4 class="modal-sub">History</h4>` + ui.timeline(events.slice(0, 8).map((e) => ({ ts: e.ts, title: esc(S.userName(e.userId)) + " — " + U.cap(e.action) + (e.note ? ": " + esc(e.note) : "") }))) : ""}
+    `, {
+      wide: true,
+      footer: nextOptions.map(([next, label]) => `<button class="btn ${next === "archived" || next === "draft" ? "btn-ghost" : "btn-gold"}" data-next="${next}">${esc(label)}</button>`).join("")
+        + `<button class="btn btn-ghost" data-role="cancel2">Close</button>`,
+    });
+    const c2 = m.el.querySelector('[data-role="cancel2"]'); if (c2) c2.addEventListener("click", m.close);
+    const openBtn = m.el.querySelector("#dlOpenFile"); if (openBtn) openBtn.addEventListener("click", () => OM.actions.openAttachment(d.storagePath));
+    m.el.querySelector("#dlSaveNotes").addEventListener("click", () => {
+      const val = m.el.querySelector("#dlClientNotes").value;
+      S.update("deliverable", d.id, { clientNotes: val }, "Updated client-facing notes — " + d.name);
+      ui.toast("Client notes saved.", "good");
+    });
+    m.el.querySelector("#dlAddNote").addEventListener("click", () => {
+      const input = m.el.querySelector("#dlNoteInput");
+      if (!input.value.trim()) return;
+      S.create("deliverableInternalNote", { deliverableId: d.id, authorId: S.meId, body: input.value.trim() }, "Added internal note — " + d.name);
+      m.close(); deliverableDetailModal(S.find("deliverable", d.id));
+    });
+    m.el.querySelectorAll("[data-next]").forEach((b) => b.addEventListener("click", () => {
+      const next = b.dataset.next;
+      const bumpsVersion = next === "internal_review" && (d.status === "revision_requested");
+      S.update("deliverable", d.id, { status: next, version: bumpsVersion ? d.version + 1 : d.version }, "Moved deliverable \"" + d.name + "\" → " + U.cap(next));
+      S.logDeliverableEvent(d.id, next, null, bumpsVersion ? d.version + 1 : d.version);
+      if (next === "sent_to_client" && d.clientId) {
+        const client = S.find("client", d.clientId);
+        const staffIds = S.db.users.filter((u) => u.portalType === "client" && u.clientId === d.clientId).map((u) => u.id);
+        if (staffIds.length) S.notify(staffIds, "deliverable", "New deliverable ready: " + d.name, client ? client.name : "", "#/c/deliverables");
+      }
+      m.close(); ui.toast("Deliverable moved to " + U.cap(next) + ".", "good"); OM.router.refresh();
+    }));
+  }
 
   /* ================= TASKS ================= */
   function taskFormFields(t = {}, projectId) {
@@ -489,7 +648,12 @@
     const cDocs = S.db.documents.filter((d) => d.clientId === c.id && S.can("view", "document", d));
     const cTasks = S.db.tasks.filter((t) => cProjects.some((p) => p.id === t.projectId));
     const cMeetings = S.db.meetings.filter((m) => m.clientId === c.id);
+    const cContracts = S.db.contracts.filter((k) => k.clientId === c.id);
+    const cProposals = S.db.proposals.filter((k) => k.clientId === c.id);
+    const cClientMessages = S.db.clientMessages.filter((m) => m.clientId === c.id);
     const showFinance = S.isExec(me) || S.moduleAccess("finance") || me.dept === "Sales";
+    const canSeeContracts = S.can("view", "contract", { projectId: null }) || cProjects.some((p) => S.can("view", "contract", { projectId: p.id }));
+    const canMessageClient = S.isExec(me) || c.ownerId === me.id || cProjects.some((p) => p.leadId === me.id || (p.team || []).includes(me.id));
     const revenueYTD = M.revenueByClientYTD().find((r) => r.client.id === c.id);
 
     el.innerHTML = ui.pageHead(esc(c.name),
@@ -501,7 +665,9 @@
       { id: "overview", label: "Overview" }, { id: "contacts", label: "Contacts", count: cContacts.length },
       { id: "projects", label: "Projects", count: cProjects.length },
       showFinance ? { id: "invoices", label: "Invoices", count: cInvoices.length } : null,
+      canSeeContracts ? { id: "contracts", label: "Contracts & Proposals", count: cContracts.length + cProposals.length } : null,
       { id: "comms", label: "Communications", count: cComms.length },
+      (canMessageClient || cClientMessages.length) ? { id: "clientmsgs", label: "Client Portal Messages", count: cClientMessages.filter((m) => !m.readAt && m.recipientId === me.id).length } : null,
       { id: "files", label: "Files", count: cDocs.length }, { id: "notes", label: "Notes" },
     ].filter(Boolean);
     ui.tabs(el.querySelector("#ctabs"), tabDefs, tab, (t) => (location.hash = "#/client/" + id + "/" + t));
@@ -550,6 +716,10 @@
           { key: "status", label: "Status", render: (i) => ui.badge(i.status) },
         ],
       });
+    } else if (tab === "contracts") {
+      renderContractsProposals(body, c, cContracts, cProposals, cProjects);
+    } else if (tab === "clientmsgs") {
+      renderClientMessagesPanel(body, c, canMessageClient);
     } else if (tab === "comms") {
       renderCommsPanel(body, () => S.db.comms.filter((x) => x.clientId === c.id), { clientId: c.id });
     } else if (tab === "files") {
@@ -568,6 +738,184 @@
       });
     }
   };
+
+  /* ================= CONTRACTS & PROPOSALS (staff-side) =================
+     Contract: Draft -> Internal Review -> Approved to Send -> Sent -> (client
+     views/signs) -> staff Countersigns -> Active -> Expired/Archived.
+     Proposal: Draft -> Internal Review -> Approved -> Sent -> (client
+     accepts/rejects — accepting spawns a project/contract/invoice via the
+     accept_proposal RPC). CEO/CFO/exec sign-off is required for the two
+     approval transitions, matching "CEO/CFO/Executive approve" in the spec. */
+  const CONTRACT_NEXT = {
+    draft: [["internal_review", "Submit for review"]],
+    internal_review: [["approved_to_send", "Approve to send"], ["draft", "Send back"]],
+    approved_to_send: [["sent", "Send to client"]],
+    sent: [], viewed: [], signed: [], countersigned: [], active: [], expired: [], archived: [],
+  };
+  const PROPOSAL_NEXT = {
+    draft: [["internal_review", "Submit for review"]],
+    internal_review: [["approved", "Approve"], ["draft", "Send back"]],
+    approved: [["sent", "Send to client"]],
+    sent: [], viewed: [], accepted: [], rejected: [], expired: [],
+  };
+  function canFireExecTransition(status, next) {
+    const me = S.me();
+    if ((status === "internal_review" && (next === "approved_to_send" || next === "approved"))) return S.isExec(me);
+    return true;
+  }
+
+  // Staff-side view of the client_messages thread the client portal writes
+  // to (js/pages_client.js CP.pages.messages) — otherwise a client's message
+  // is only reachable via a raw query, invisible to anyone in the staff app.
+  function renderClientMessagesPanel(body, c, canReply) {
+    const me = S.me();
+    const clientUsers = S.db.users.filter((u) => u.portalType === "client" && u.clientId === c.id);
+    let activeContact = clientUsers[0] ? clientUsers[0].id : null;
+    function draw() {
+      const thread = activeContact ? S.db.clientMessages.filter((m) => m.clientId === c.id && (m.senderId === activeContact || m.recipientId === activeContact)).sort((a, b) => a.createdAt - b.createdAt) : [];
+      body.innerHTML = `<div class="grid-2" style="grid-template-columns:220px 1fr">
+        <div class="card card-flush">${clientUsers.map((u) => `<div class="list-row clickable ${u.id === activeContact ? "active-contact" : ""}" data-c="${u.id}">${ui.avatar(u)}<span class="list-main"><b>${esc(u.name)}</b></span></div>`).join("") || ui.empty("No client portal users yet.")}</div>
+        <div>
+          <div class="card" style="max-height:440px;overflow-y:auto">${thread.map((m) => `<div class="comment"><div><div class="comment-head"><b>${esc(S.userName(m.senderId))}</b><span class="muted">${U.ago(m.createdAt)}</span></div><div class="comment-body">${esc(m.body)}</div></div></div>`).join("") || ui.empty(activeContact ? "No messages yet." : "Select a contact.")}</div>
+          ${activeContact && canReply ? `<div class="inline-add"><input type="text" id="cmBody" placeholder="Reply…"><button class="btn btn-gold btn-sm" id="cmSend">Send</button></div>` : ""}
+        </div>
+      </div>`;
+      body.querySelectorAll("[data-c]").forEach((r) => r.addEventListener("click", () => {
+        activeContact = r.dataset.c;
+        S.db.clientMessages.filter((m) => m.recipientId === me.id && m.senderId === activeContact && !m.readAt).forEach((m) => S.update("clientMessage", m.id, { readAt: Date.now() }, "Read client message"));
+        draw();
+      }));
+      const sendBtn = body.querySelector("#cmSend");
+      if (sendBtn) sendBtn.addEventListener("click", () => {
+        const input = body.querySelector("#cmBody");
+        const val = input.value.trim();
+        if (!val) return;
+        try {
+          S.create("clientMessage", { clientId: c.id, senderId: me.id, recipientId: activeContact, body: val }, "Replied to " + S.userName(activeContact));
+          draw();
+        } catch (e) { ui.toast(e.message, "bad"); }
+      });
+    }
+    draw();
+  }
+
+  function renderContractsProposals(body, c, contracts, proposals, projects) {
+    const canCreate = S.can("create", "proposal", null);
+    body.innerHTML =
+      ui.sectionCard("Proposals", proposals.map((p) => `
+        <div class="list-row clickable" data-proposal="${p.id}"><span class="list-icon">◈</span>
+          <span class="list-main"><b>${esc(p.title)}</b><span class="muted">${p.price ? U.money(p.price) : ""}</span></span>${ui.badge(p.status)}</div>`).join("")
+        || ui.empty("No proposals yet."), { action: canCreate ? '<button class="btn btn-gold btn-sm" id="newProposal">+ New proposal</button>' : "" }) +
+      ui.sectionCard("Contracts", contracts.map((k) => `
+        <div class="list-row clickable" data-contract="${k.id}"><span class="list-icon">✎</span>
+          <span class="list-main"><b>${esc(k.title)}</b><span class="muted">${k.signatureName ? "Signed by " + esc(k.signatureName) : ""}</span></span>${ui.badge(k.status)}</div>`).join("")
+        || ui.empty("No contracts yet."), { action: canCreate ? '<button class="btn btn-gold btn-sm" id="newContract">+ New contract</button>' : "" });
+
+    const np = body.querySelector("#newProposal");
+    if (np) np.addEventListener("click", () => ui.formModal("New proposal", [
+      { name: "title", label: "Title", required: true, span2: true },
+      { name: "scope", label: "Scope of work", type: "textarea", span2: true },
+      { name: "timeline", label: "Timeline", placeholder: "e.g. 6 weeks from kickoff" },
+      { name: "deliverablesSummary", label: "Deliverables", placeholder: "e.g. 3 videos, 10 photos" },
+      { name: "price", label: "Price ($)", type: "number", required: true },
+      { name: "paymentTerms", label: "Payment terms", placeholder: "e.g. 50% deposit, 50% on delivery" },
+      { name: "addons", label: "Optional add-ons", type: "textarea", span2: true },
+      { name: "expiresDays", label: "Expires in (days)", type: "number", value: 30 },
+    ], (v, close) => {
+      S.create("proposal", {
+        clientId: c.id, title: v.title, status: "draft", scope: v.scope, timeline: v.timeline,
+        deliverablesSummary: v.deliverablesSummary, price: +v.price, paymentTerms: v.paymentTerms, addons: v.addons,
+        createdBy: S.meId, expiresAt: v.expiresDays !== "" ? Date.now() + (+v.expiresDays) * U.DAY : null,
+      }, "Drafted proposal — " + v.title + " for " + c.name);
+      close(); ui.toast("Proposal drafted.", "good"); OM.router.refresh();
+    }, { wide: true }));
+
+    const nc = body.querySelector("#newContract");
+    if (nc) nc.addEventListener("click", () => ui.formModal("New contract", [
+      { name: "title", label: "Title", required: true, span2: true },
+      { name: "projectId", label: "Project", type: "select", options: [["", "— None —"]].concat(projects.map((p) => [p.id, p.code + " · " + p.name])) },
+      { name: "body", label: "Contract terms", type: "textarea", span2: true, rows: 8 },
+      { name: "expiresDays", label: "Expires in (days)", type: "number", value: 30 },
+    ], (v, close) => {
+      S.create("contract", {
+        clientId: c.id, projectId: v.projectId || null, title: v.title, status: "draft", body: v.body,
+        createdBy: S.meId, expiresAt: v.expiresDays !== "" ? Date.now() + (+v.expiresDays) * U.DAY : null,
+      }, "Drafted contract — " + v.title + " for " + c.name);
+      close(); ui.toast("Contract drafted.", "good"); OM.router.refresh();
+    }, { wide: true }));
+
+    body.querySelectorAll("[data-proposal]").forEach((row) => row.addEventListener("click", () => proposalDetailModal(S.find("proposal", row.dataset.proposal), c)));
+    body.querySelectorAll("[data-contract]").forEach((row) => row.addEventListener("click", () => contractDetailModal(S.find("contract", row.dataset.contract), c)));
+  }
+
+  function proposalDetailModal(pr, c) {
+    if (!pr) return;
+    const nextOptions = S.can("edit", "proposal", pr) ? (PROPOSAL_NEXT[pr.status] || []).filter(([next]) => canFireExecTransition(pr.status, next)) : [];
+    const m = ui.modal(pr.title, `
+      <div class="detail-grid">
+        <div><span class="detail-label">Status</span><b>${ui.badge(pr.status)}</b></div>
+        <div><span class="detail-label">Price</span><b>${pr.price ? U.money(pr.price) : "—"}</b></div>
+        <div><span class="detail-label">Timeline</span><b>${esc(pr.timeline || "—")}</b></div>
+        <div><span class="detail-label">Payment terms</span><b>${esc(pr.paymentTerms || "—")}</b></div>
+        <div><span class="detail-label">Sent</span><b>${pr.sentAt ? U.date(pr.sentAt) : "—"}</b></div>
+        <div><span class="detail-label">Responded</span><b>${pr.respondedAt ? U.date(pr.respondedAt) : "—"}</b></div>
+      </div>
+      ${pr.scope ? `<h4 class="modal-sub">Scope</h4><p class="body-text">${esc(pr.scope)}</p>` : ""}
+      ${pr.deliverablesSummary ? `<h4 class="modal-sub">Deliverables</h4><p class="body-text">${esc(pr.deliverablesSummary)}</p>` : ""}
+      ${pr.addons ? `<h4 class="modal-sub">Add-ons</h4><p class="body-text">${esc(pr.addons)}</p>` : ""}
+      ${pr.status === "accepted" ? `<div class="inline-note">Accepted — a project, contract, and invoice were generated automatically.</div>` : ""}
+    `, { wide: true, footer: nextOptions.map(([next, label]) => `<button class="btn ${next === "draft" ? "btn-ghost" : "btn-gold"}" data-next="${next}">${esc(label)}</button>`).join("") + `<button class="btn btn-ghost" data-role="cancel2">Close</button>` });
+    m.el.querySelector('[data-role="cancel2"]').addEventListener("click", m.close);
+    m.el.querySelectorAll("[data-next]").forEach((b) => b.addEventListener("click", () => {
+      const next = b.dataset.next;
+      const patch = { status: next };
+      if (next === "sent") patch.sentAt = Date.now();
+      S.update("proposal", pr.id, patch, "Moved proposal \"" + pr.title + "\" → " + U.cap(next));
+      if (next === "sent") {
+        const staffIds = S.db.users.filter((u) => u.portalType === "client" && u.clientId === c.id).map((u) => u.id);
+        if (staffIds.length) S.notify(staffIds, "proposal", "New proposal: " + pr.title, c.name, "#/c/proposals");
+      }
+      m.close(); ui.toast("Proposal moved to " + U.cap(next) + ".", "good"); OM.router.refresh();
+    }));
+  }
+
+  function contractDetailModal(k, c) {
+    if (!k) return;
+    const nextOptions = S.can("edit", "contract", k) ? (CONTRACT_NEXT[k.status] || []).filter(([next]) => canFireExecTransition(k.status, next)) : [];
+    const canCountersign = k.status === "signed" && S.isExec(S.me());
+    const m = ui.modal(k.title, `
+      <div class="detail-grid">
+        <div><span class="detail-label">Status</span><b>${ui.badge(k.status)}</b></div>
+        <div><span class="detail-label">Expires</span><b>${k.expiresAt ? U.date(k.expiresAt) : "—"}</b></div>
+        <div><span class="detail-label">Sent</span><b>${k.sentAt ? U.date(k.sentAt) : "—"}</b></div>
+        <div><span class="detail-label">Signed</span><b>${k.signedAt ? U.date(k.signedAt) + " by " + esc(k.signatureName || "") : "—"}</b></div>
+        <div><span class="detail-label">Countersigned</span><b>${k.countersignedAt ? U.date(k.countersignedAt) : "—"}</b></div>
+      </div>
+      ${k.body ? `<h4 class="modal-sub">Terms</h4><p class="body-text">${esc(k.body)}</p>` : ""}
+    `, {
+      wide: true,
+      footer: nextOptions.map(([next, label]) => `<button class="btn ${next === "draft" ? "btn-ghost" : "btn-gold"}" data-next="${next}">${esc(label)}</button>`).join("")
+        + (canCountersign ? `<button class="btn btn-gold" id="ctrCountersign">Countersign</button>` : "")
+        + `<button class="btn btn-ghost" data-role="cancel2">Close</button>`,
+    });
+    m.el.querySelector('[data-role="cancel2"]').addEventListener("click", m.close);
+    m.el.querySelectorAll("[data-next]").forEach((b) => b.addEventListener("click", () => {
+      const next = b.dataset.next;
+      const patch = { status: next };
+      if (next === "sent") patch.sentAt = Date.now();
+      S.update("contract", k.id, patch, "Moved contract \"" + k.title + "\" → " + U.cap(next));
+      if (next === "sent") {
+        const staffIds = S.db.users.filter((u) => u.portalType === "client" && u.clientId === c.id).map((u) => u.id);
+        if (staffIds.length) S.notify(staffIds, "contract", "New contract to review: " + k.title, c.name, "#/c/contracts");
+      }
+      m.close(); ui.toast("Contract moved to " + U.cap(next) + ".", "good"); OM.router.refresh();
+    }));
+    const cs = m.el.querySelector("#ctrCountersign");
+    if (cs) cs.addEventListener("click", () => {
+      S.countersignContract(k.id).then(() => { ui.toast("Contract countersigned — now active.", "good"); OM.router.refresh(); }).catch((e) => ui.toast(e.message, "bad"));
+      m.close();
+    });
+  }
 
   /* Shared communications panel (used on client profile + comms module) */
   const KINDS = [["call", "☎ Call"], ["email", "✉ Email"], ["meeting", "◫ Meeting"], ["sms", "▤ Text"], ["voice_note", "♪ Voice note"], ["note", "✎ Internal note"]];

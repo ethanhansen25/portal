@@ -16,7 +16,8 @@
   const parseTs = (v) => (v == null ? null : (typeof v === "number" ? v : Date.parse(v)));
 
   // readKeys whose value is a moment in time (converted to millis on read)
-  const TIME_KEYS = new Set(["createdAt", "ts", "dueDate", "startDate", "hireDate", "issuedAt", "dueAt", "paidAt", "followUpAt", "lastActivity", "uploadedAt", "requestedAt", "appliedAt", "runDate", "since", "start", "end", "date", "decidedAt", "lastActiveAt"]);
+  const TIME_KEYS = new Set(["createdAt", "ts", "dueDate", "startDate", "hireDate", "issuedAt", "dueAt", "paidAt", "followUpAt", "lastActivity", "uploadedAt", "requestedAt", "appliedAt", "runDate", "since", "start", "end", "date", "decidedAt", "lastActiveAt",
+    "sentAt", "viewedAt", "signedAt", "countersignedAt", "respondedAt", "approvedAt", "assignedAt", "doneAt", "readAt", "expiresAt"]);
 
   /* Entity definitions. `cols` maps db_column -> readKey (camelCase shape the
      pages use). `dates` lists readKeys backed by a DATE column (formatted
@@ -25,8 +26,53 @@
   const E = {
     user: {
       table: "profiles", coll: "users",
-      cols: { id: "id", name: "name", email: "email", phone: "phone", role: "role", dept: "dept", title: "title", hire_date: "hireDate", status: "status", last_active_at: "lastActiveAt", avatar_url: "avatarUrl", created_at: "createdAt" },
+      cols: { id: "id", name: "name", email: "email", phone: "phone", role: "role", dept: "dept", title: "title", hire_date: "hireDate", status: "status", last_active_at: "lastActiveAt", avatar_url: "avatarUrl", portal_type: "portalType", client_id: "clientId", manager_id: "managerId", employment_type: "employmentType", pay_type: "payType", permission_group: "permissionGroup", company: "company", approved_by: "approvedBy", approved_at: "approvedAt", created_at: "createdAt" },
       dates: ["hireDate"], readonlyCreate: true,
+    },
+    hrNote: {
+      table: "hr_notes", coll: "hrNotes",
+      cols: { id: "id", profile_id: "profileId", category: "category", author_id: "authorId", body: "body", created_at: "createdAt" },
+    },
+    onboardingTemplate: {
+      table: "onboarding_templates", coll: "onboardingTemplates",
+      cols: { id: "id", dept: "dept", name: "name", created_by: "createdBy", created_at: "createdAt" },
+      embeds: { onboarding_template_tasks: { as: "tasks", select: "*", map: (r) => ({ id: r.id, text: r.text, category: r.category, position: r.position }) } },
+    },
+    onboardingTemplateTask: {
+      table: "onboarding_template_tasks", coll: "onboardingTemplateTasks",
+      cols: { id: "id", template_id: "templateId", text: "text", category: "category", position: "position" },
+    },
+    onboardingAssignment: {
+      table: "onboarding_assignments", coll: "onboardingAssignments",
+      cols: { id: "id", profile_id: "profileId", template_id: "templateId", assigned_by: "assignedBy", assigned_at: "assignedAt", approved_by: "approvedBy", approved_at: "approvedAt" },
+      embeds: { onboarding_task_progress: { as: "tasks", select: "*", map: (r) => ({ id: r.id, templateTaskId: r.template_task_id, text: r.text, category: r.category, position: r.position, done: r.done, doneAt: parseTs(r.done_at), doneBy: r.done_by }) } },
+    },
+    deliverable: {
+      table: "deliverables", coll: "deliverables",
+      cols: { id: "id", project_id: "projectId", client_id: "clientId", name: "name", kind: "kind", status: "status", version: "version", storage_path: "storagePath", thumbnail_path: "thumbnailPath", notes: "notes", client_notes: "clientNotes", download_permission: "downloadPermission", uploaded_by: "uploadedBy", uploaded_at: "uploadedAt", due_date: "dueDate" },
+      dates: ["dueDate"],
+    },
+    deliverableInternalNote: {
+      table: "deliverable_internal_notes", coll: "deliverableInternalNotes",
+      cols: { id: "id", deliverable_id: "deliverableId", author_id: "authorId", body: "body", created_at: "createdAt" },
+    },
+    deliverableEvent: {
+      table: "deliverable_events", coll: "deliverableEvents",
+      cols: { id: "id", deliverable_id: "deliverableId", user_id: "userId", action: "action", note: "note", version: "version", ts: "ts" },
+    },
+    contract: {
+      table: "contracts", coll: "contracts",
+      cols: { id: "id", client_id: "clientId", project_id: "projectId", title: "title", status: "status", body: "body", storage_path: "storagePath", created_by: "createdBy", created_at: "createdAt", sent_at: "sentAt", viewed_at: "viewedAt", signed_at: "signedAt", signature_name: "signatureName", countersigned_at: "countersignedAt", countersigned_by: "countersignedBy", expires_at: "expiresAt" },
+      dates: ["expiresAt"],
+    },
+    proposal: {
+      table: "proposals", coll: "proposals",
+      cols: { id: "id", client_id: "clientId", title: "title", status: "status", scope: "scope", timeline: "timeline", deliverables_summary: "deliverablesSummary", price: "price", payment_terms: "paymentTerms", addons: "addons", created_by: "createdBy", created_at: "createdAt", sent_at: "sentAt", viewed_at: "viewedAt", responded_at: "respondedAt", expires_at: "expiresAt", generated_contract_id: "generatedContractId", generated_project_id: "generatedProjectId", generated_invoice_id: "generatedInvoiceId" },
+      dates: ["expiresAt"],
+    },
+    clientMessage: {
+      table: "client_messages", coll: "clientMessages",
+      cols: { id: "id", client_id: "clientId", project_id: "projectId", contract_id: "contractId", proposal_id: "proposalId", invoice_id: "invoiceId", sender_id: "senderId", recipient_id: "recipientId", body: "body", created_at: "createdAt", read_at: "readAt" },
     },
     client: {
       table: "clients", coll: "clients",
@@ -103,7 +149,7 @@
     },
     review: {
       table: "reviews", coll: "reviews",
-      cols: { id: "id", user_id: "userId", period: "period", reviewer_id: "reviewerId", score: "score", status: "status", summary: "summary" },
+      cols: { id: "id", user_id: "userId", period: "period", reviewer_id: "reviewerId", score: "score", status: "status", summary: "summary", review_type: "reviewType", communication_score: "communicationScore", reliability_score: "reliabilityScore", quality_score: "qualityScore", leadership_score: "leadershipScore", strengths: "strengths", weaknesses: "weaknesses", goals: "goals", promotion_recommendation: "promotionRecommendation", pay_recommendation: "payRecommendation", final_rating: "finalRating", acknowledged_at: "acknowledgedAt" },
     },
     hrAction: {
       table: "hr_actions", coll: "hrActions",
@@ -126,7 +172,7 @@
     },
     document: {
       table: "documents", coll: "documents",
-      cols: { id: "id", name: "name", category: "category", file_type: "type", storage_path: "storagePath", size_bytes: "size", client_id: "clientId", project_id: "projectId", uploaded_by: "uploadedBy", uploaded_at: "uploadedAt", tags: "tags", confidential: "confidential", version: "version" },
+      cols: { id: "id", name: "name", category: "category", file_type: "type", storage_path: "storagePath", size_bytes: "size", client_id: "clientId", project_id: "projectId", uploaded_by: "uploadedBy", uploaded_at: "uploadedAt", tags: "tags", confidential: "confidential", visibility: "visibility", version: "version" },
     },
     initiative: {
       table: "initiatives", coll: "initiatives",

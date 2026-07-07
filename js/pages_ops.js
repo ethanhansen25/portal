@@ -191,24 +191,35 @@
     tab = tab || "employees";
     el.innerHTML = ui.pageHead("People", "Employees, hiring, time off, reviews, and records") + `<div id="htabs"></div><div id="hbody" class="tab-body"></div>`;
     ui.tabs(el.querySelector("#htabs"), [
+      { id: "pending", label: "Pending Staff", count: S.db.users.filter((u) => u.status === "pending").length },
       { id: "employees", label: "Employees", count: S.db.users.filter((u) => u.status === "active").length },
       { id: "hiring", label: "Hiring", count: S.db.candidates.filter((c) => !["hired", "rejected"].includes(c.stage)).length },
+      { id: "onboarding", label: "Onboarding", count: S.db.onboardingAssignments.filter((a) => !a.approvedAt).length },
       { id: "timeoff", label: "Time Off", count: S.db.timeOff.filter((t) => t.status === "pending").length },
       { id: "reviews", label: "Reviews" },
       { id: "actions", label: "Actions & Records" },
     ], tab, (t) => (location.hash = "#/hr/" + t));
     const body = el.querySelector("#hbody");
 
-    if (tab === "employees") {
+    if (tab === "pending") {
+      const pending = S.db.users.filter((u) => u.status === "pending");
+      body.innerHTML = ui.sectionCard("New sign-ups awaiting placement",
+        pending.length ? pending.map((u) => `
+        <div class="list-row"><span class="list-icon">☺</span>
+          <span class="list-main"><b>${esc(u.name)}</b><span class="muted">${esc(u.email)}${u.phone ? " · " + esc(u.phone) : ""} · signed up ${U.date(u.createdAt)}</span></span>
+          <button class="btn btn-gold btn-sm" data-approve="${u.id}">Review & approve</button>
+        </div>`).join("") : ui.empty("No pending signups right now. New accounts land here with zero access until placed."));
+      body.querySelectorAll("[data-approve]").forEach((b) => b.addEventListener("click", () => approvalModal(S.find("user", b.dataset.approve))));
+    } else if (tab === "employees") {
       body.innerHTML = `<div class="card card-flush" id="empTbl"></div>`;
       ui.table(body.querySelector("#empTbl"), {
-        rows: () => S.db.users,
+        rows: () => S.db.users.filter((u) => u.status !== "pending" && u.portalType !== "client"),
         searchKeys: ["name", "dept", "title", "email"],
         exportName: "employees", exportEntity: "employee",
         columns: [
           { key: "name", label: "Employee", render: (u) => ui.userCell(u.id), sortVal: (u) => u.name },
           { key: "dept", label: "Department" },
-          { key: "role", label: "Role", render: (u) => OM.ROLES[u.role].label, sortVal: (u) => OM.ROLES[u.role].level },
+          { key: "role", label: "Role", render: (u) => u.role ? OM.ROLES[u.role].label : "—", sortVal: (u) => u.role ? OM.ROLES[u.role].level : 0 },
           { key: "hireDate", label: "Tenure", render: (u) => { const y = (Date.now() - u.hireDate) / (365 * U.DAY); return y >= 1 ? y.toFixed(1) + " yrs" : Math.round(y * 12) + " mos"; }, sortVal: (u) => u.hireDate },
           { key: "salary", label: "Salary", render: (u) => u.salary ? U.money(u.salary) : (u.rate ? "$" + u.rate + "/hr" : "—"), sortVal: (u) => u.salary },
           { key: "status", label: "Status", render: (u) => ui.badge(u.status) },
@@ -260,6 +271,39 @@
         S.create("candidate", { name: v.name, roleApplied: v.roleApplied, dept: v.dept, source: v.source, email: v.email, notes: v.notes, stage: "applied", appliedAt: Date.now(), rating: 0 }, "Added candidate — " + v.name);
         close(); OM.router.refresh();
       }));
+    } else if (tab === "onboarding") {
+      const canManage = S.isExec(S.me()) || S.me().dept === "Human Resources";
+      const inProgress = S.db.onboardingAssignments.filter((a) => !a.approvedAt);
+      body.innerHTML =
+        ui.sectionCard("Templates", S.db.onboardingTemplates.map((t) => `
+          <div class="list-row"><span class="list-icon">▤</span>
+            <span class="list-main"><b>${esc(t.name)}</b><span class="muted">${esc(t.dept || "All departments")} · ${(t.tasks || []).length} tasks</span></span>
+          </div>`).join("") || ui.empty("No onboarding templates yet."),
+          { action: canManage ? '<button class="btn btn-gold btn-sm" id="newTemplate">+ New template</button>' : "" }) +
+        ui.sectionCard("In progress", inProgress.map((a) => {
+          const emp = S.find("user", a.profileId);
+          const tmpl = S.find("onboardingTemplate", a.templateId);
+          const done = (a.tasks || []).filter((t) => t.done).length, total = (a.tasks || []).length;
+          const allDone = total > 0 && done === total;
+          return `<div class="list-row"><span class="list-icon">☺</span>
+            <span class="list-main"><b>${esc(emp ? emp.name : "—")}</b><span class="muted">${esc(tmpl ? tmpl.name : "—")} · ${done}/${total} tasks complete</span></span>
+            ${allDone && canManage ? `<button class="btn btn-gold btn-sm" data-approve-onb="${a.id}">Give final approval</button>` : ui.badge(allDone ? "ready" : "in_progress")}
+          </div>`;
+        }).join("") || ui.empty("Nobody is mid-onboarding right now."));
+      const nt = body.querySelector("#newTemplate");
+      if (nt) nt.addEventListener("click", () => ui.formModal("New onboarding template", [
+        { name: "name", label: "Template name", required: true, placeholder: "e.g. Production — New Hire" },
+        { name: "dept", label: "Department", type: "select", options: [["", "— All departments —"], "Executive", "Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration", "Contractors"] },
+        { name: "tasks", label: "Checklist (one item per line)", type: "textarea", span2: true, rows: 14, required: true,
+          value: ["Welcome message", "Account setup", "Company handbook", "NDA / contract", "Tax / payment info", "Role expectations", "Department training", "Brand guidelines", "Software access", "First assignments", "Manager intro", "Equipment assignment", "Final onboarding approval"].join("\n") },
+      ], (v, close) => {
+        const tasks = v.tasks.split("\n").map((s) => s.trim()).filter(Boolean).map((text) => ({ text, category: "general" }));
+        S.create("onboardingTemplate", { name: v.name, dept: v.dept || null, tasks }, "Created onboarding template — " + v.name);
+        close(); ui.toast("Template created.", "good"); OM.router.refresh();
+      }, { wide: true }));
+      body.querySelectorAll("[data-approve-onb]").forEach((b) => b.addEventListener("click", () => {
+        S.approveOnboarding(b.dataset.approveOnb).then(() => { ui.toast("Onboarding approved.", "good"); OM.router.refresh(); }).catch((e) => ui.toast(e.message, "bad"));
+      }));
     } else if (tab === "timeoff") {
       body.innerHTML = `<div class="card card-flush">` + S.db.timeOff.slice().sort((a, b) => b.start - a.start).map((t) => `
         <div class="list-row"><span class="list-icon">✈</span>
@@ -273,52 +317,203 @@
         S.decideTimeOff(b.dataset.toDen, "denied"); OM.router.refresh();
       }));
     } else if (tab === "reviews") {
-      body.innerHTML = `<div class="card card-flush">` + S.db.reviews.map((r) => `
-        <div class="list-row"><span class="list-main"><b>${esc(S.userName(r.userId))} — ${esc(r.period)}</b><span class="muted">${esc(r.summary)}</span><span class="muted">Reviewer: ${esc(S.userName(r.reviewerId))}</span></span>
-        <span class="review-score ${r.score >= 4.5 ? "tone-text-good" : r.score < 3.5 ? "tone-text-warn" : ""}">${r.score}</span>${ui.badge(r.status)}</div>`).join("") + "</div>";
+      const canCreate = S.can("create", "review", { userId: "" }) || S.isExec(S.me()) || S.me().dept === "Human Resources" || S.me().role === "dept_head";
+      const due = reviewsDue();
+      body.innerHTML =
+        (due.length ? ui.sectionCard("Reviews due", due.map((d) => `
+          <div class="list-row clickable" data-due-user="${d.u.id}"><span class="list-icon">⏱</span>
+          <span class="list-main"><b>${esc(d.u.name)}</b><span class="muted">${esc(d.label)} · hired ${U.date(d.u.hireDate)}</span></span></div>`).join("")) : "") +
+        ui.sectionCard("Performance reviews", S.db.reviews.slice().reverse().map((r) => `
+        <div class="list-row clickable" data-review="${r.id}"><span class="list-main"><b>${esc(S.userName(r.userId))} — ${U.cap(r.reviewType || "review")} ${esc(r.period || "")}</b>
+        <span class="muted">Reviewer: ${esc(S.userName(r.reviewerId))} · Final rating ${esc(r.finalRating || r.score || "—")}</span></span>${ui.badge(r.status)}</div>`).join("")
+        || ui.empty("No reviews recorded yet."),
+        { action: canCreate ? '<button class="btn btn-gold btn-sm" id="newReview">+ New review</button>' : "" });
+      const nr = body.querySelector("#newReview");
+      if (nr) nr.addEventListener("click", () => reviewModal());
+      body.querySelectorAll("[data-review]").forEach((row) => row.addEventListener("click", () => reviewDetailModal(S.find("review", row.dataset.review))));
+      body.querySelectorAll("[data-due-user]").forEach((row) => row.addEventListener("click", () => reviewModal(row.dataset.dueUser)));
     } else if (tab === "actions") {
+      const canAdd = S.isExec(S.me()) || S.me().dept === "Human Resources";
       body.innerHTML = ui.sectionCard("Coaching, write-ups & warnings", S.db.hrActions.map((a) => `
         <div class="list-row"><span class="list-icon">${a.type === "writeup" ? "⚠" : "✎"}</span>
-        <span class="list-main"><b>${esc(S.userName(a.userId))} — ${U.cap(a.type)}</b><span class="muted">${esc(a.summary)}</span><span class="muted">Issued by ${esc(S.userName(a.issuedBy))} · ${U.date(a.date)}</span></span>${ui.badge(a.status)}</div>`).join("") || ui.empty("No records.")) +
-      ui.sectionCard("Onboarding & offboarding", `<div class="list-row"><span class="list-main"><b>Marcus Doyle — Editor II</b><span class="muted">Onboarding blocked on CEO approval (AP-4). Checklist ready: equipment, accounts, handbook, W-4.</span></span>${ui.badge("pending")}</div>
-        <div class="list-row"><span class="list-main"><b>Ben Carter — internship ends in 5 weeks</b><span class="muted">Conversion decision due 2 weeks prior. Sofia to submit recommendation.</span></span>${ui.badge("scheduled")}</div>`);
+        <span class="list-main"><b>${esc(S.userName(a.userId))} — ${U.cap(a.type)}</b><span class="muted">${esc(a.summary)}</span><span class="muted">Issued by ${esc(S.userName(a.issuedBy))} · ${U.date(a.date)}</span></span>${ui.badge(a.status)}</div>`).join("") || ui.empty("No records."),
+        { action: canAdd ? '<button class="btn btn-gold btn-sm" id="newHrAction">+ Add record</button>' : "" });
+      const na = body.querySelector("#newHrAction");
+      if (na) na.addEventListener("click", () => {
+        const staff = S.db.users.filter((u) => u.status === "active" && u.portalType !== "client").map((u) => [u.id, u.name + " · " + (u.title || u.dept)]);
+        ui.formModal("Add coaching / write-up / warning", [
+          { name: "userId", label: "Employee", type: "select", required: true, options: staff },
+          { name: "type", label: "Type", type: "select", required: true, options: [["coaching", "Coaching"], ["writeup", "Write-up"], ["warning", "Warning"]] },
+          { name: "summary", label: "Summary", type: "textarea", required: true, span2: true },
+        ], (v, close) => {
+          S.create("hrAction", { userId: v.userId, type: v.type, date: Date.now(), issuedBy: S.meId, summary: v.summary, status: "active" }, U.cap(v.type) + " issued — " + S.userName(v.userId));
+          close(); ui.toast("Record added.", "good"); OM.router.refresh();
+        }, { wide: true });
+      });
     }
   };
+
+  const REVIEW_TYPES = [["30_day", "30-day"], ["60_day", "60-day"], ["90_day", "90-day"], ["quarterly", "Quarterly"], ["annual", "Annual"], ["project", "Project-based"], ["contractor", "Contractor"]];
+  // No cron/scheduled-job infrastructure exists in this project, so "review
+  // due" reminders can't fire as a push notification on their own — this
+  // computes the same thing on demand from tenure + existing review history
+  // and surfaces it as a worklist instead.
+  function reviewsDue() {
+    const now = Date.now();
+    const staff = S.db.users.filter((u) => u.status === "active" && u.portalType !== "client" && u.hireDate);
+    const has = (uid, type) => S.db.reviews.some((r) => r.userId === uid && r.reviewType === type);
+    const out = [];
+    staff.forEach((u) => {
+      const tenureDays = (now - u.hireDate) / U.DAY;
+      if (tenureDays >= 25 && tenureDays <= 45 && !has(u.id, "30_day")) out.push({ u, label: "30-day review due" });
+      else if (tenureDays >= 55 && tenureDays <= 75 && !has(u.id, "60_day")) out.push({ u, label: "60-day review due" });
+      else if (tenureDays >= 85 && tenureDays <= 105 && !has(u.id, "90_day")) out.push({ u, label: "90-day review due" });
+      else if (tenureDays >= 350) {
+        const annualCount = S.db.reviews.filter((r) => r.userId === u.id && r.reviewType === "annual").length;
+        if (annualCount < Math.floor(tenureDays / 365)) out.push({ u, label: "Annual review due" });
+      }
+    });
+    return out;
+  }
+  function reviewModal(presetUserId) {
+    const staff = S.db.users.filter((u) => u.status === "active" && u.portalType !== "client").map((u) => [u.id, u.name + " · " + (u.title || u.dept)]);
+    ui.formModal("New performance review", [
+      { name: "userId", label: "Employee", type: "select", required: true, options: staff, value: presetUserId || "" },
+      { name: "reviewType", label: "Review type", type: "select", required: true, options: REVIEW_TYPES },
+      { name: "period", label: "Period label", placeholder: "e.g. Q3 2026", required: true },
+      { name: "performanceScore", label: "Performance (1–5)", type: "number", step: "0.1" },
+      { name: "communicationScore", label: "Communication (1–5)", type: "number", step: "0.1" },
+      { name: "reliabilityScore", label: "Reliability (1–5)", type: "number", step: "0.1" },
+      { name: "qualityScore", label: "Quality (1–5)", type: "number", step: "0.1" },
+      { name: "leadershipScore", label: "Leadership (1–5)", type: "number", step: "0.1" },
+      { name: "finalRating", label: "Final rating (1–5)", type: "number", step: "0.1", required: true },
+      { name: "strengths", label: "Strengths", type: "textarea", span2: true },
+      { name: "weaknesses", label: "Areas to improve", type: "textarea", span2: true },
+      { name: "goals", label: "Goals", type: "textarea", span2: true },
+      { name: "promotionRecommendation", label: "Promotion recommendation", type: "select", options: [["0", "No"], ["1", "Yes — recommend for promotion"]], value: "0" },
+      { name: "payRecommendation", label: "Pay recommendation", placeholder: "e.g. +5% at next cycle" },
+      { name: "summary", label: "Summary notes", type: "textarea", span2: true },
+    ], (v, close) => {
+      S.create("review", {
+        userId: v.userId, reviewerId: S.meId, reviewType: v.reviewType, period: v.period,
+        score: v.performanceScore ? +v.performanceScore : null, finalRating: +v.finalRating,
+        communicationScore: v.communicationScore ? +v.communicationScore : null,
+        reliabilityScore: v.reliabilityScore ? +v.reliabilityScore : null,
+        qualityScore: v.qualityScore ? +v.qualityScore : null,
+        leadershipScore: v.leadershipScore ? +v.leadershipScore : null,
+        strengths: v.strengths, weaknesses: v.weaknesses, goals: v.goals,
+        promotionRecommendation: v.promotionRecommendation === "1", payRecommendation: v.payRecommendation || null,
+        summary: v.summary, status: "approved",
+      }, "Created " + v.reviewType + " review — " + S.userName(v.userId));
+      S.notify(v.userId, "hr", "A performance review is ready", v.reviewType + " · " + v.period, "#/settings");
+      close(); ui.toast("Review recorded.", "good"); OM.router.refresh();
+    }, { wide: true, submitLabel: "Save review" });
+  }
+  function reviewDetailModal(r) {
+    if (!r) return;
+    const rows = [
+      ["Employee", S.userName(r.userId)], ["Reviewer", S.userName(r.reviewerId)], ["Type", U.cap(r.reviewType || "—")], ["Period", r.period || "—"],
+      ["Performance", r.score ?? "—"], ["Communication", r.communicationScore ?? "—"], ["Reliability", r.reliabilityScore ?? "—"],
+      ["Quality", r.qualityScore ?? "—"], ["Leadership", r.leadershipScore ?? "—"], ["Final rating", r.finalRating ?? "—"],
+      ["Promotion rec.", r.promotionRecommendation ? "Yes" : "No"], ["Pay rec.", r.payRecommendation || "—"],
+    ];
+    ui.modal("Review — " + S.userName(r.userId), `
+      <div class="detail-grid">${rows.map(([l, v]) => `<div><span class="detail-label">${esc(l)}</span><b>${esc(String(v))}</b></div>`).join("")}</div>
+      ${r.strengths ? `<h4 class="modal-sub">Strengths</h4><p class="body-text">${esc(r.strengths)}</p>` : ""}
+      ${r.weaknesses ? `<h4 class="modal-sub">Areas to improve</h4><p class="body-text">${esc(r.weaknesses)}</p>` : ""}
+      ${r.goals ? `<h4 class="modal-sub">Goals</h4><p class="body-text">${esc(r.goals)}</p>` : ""}
+      ${r.summary ? `<h4 class="modal-sub">Summary</h4><p class="body-text">${esc(r.summary)}</p>` : ""}
+      ${r.acknowledgedAt ? `<p class="footnote">Acknowledged by employee ${U.date(r.acknowledgedAt)}</p>` : ""}`,
+      { wide: true });
+  }
+
+  // Turns a pending signup (Status=Pending, Access=None, Portal Type=Unassigned)
+  // into a placed Staff / Contractor / Client account. All the actual work —
+  // placement, project-team seeding, onboarding assignment, notification,
+  // audit — happens inside the approve_user() RPC so it can't be partially
+  // applied; this just collects the form and hands it off.
+  function approvalModal(u) {
+    const clients = S.db.clients.slice().sort((a, b) => a.name.localeCompare(b.name)).map((c) => [c.id, c.name]);
+    const projects = S.db.projects.filter((p) => p.status === "active").map((p) => [p.id, p.code + " · " + p.name]);
+    const managers = S.db.users.filter((m) => m.status === "active" && m.id !== u.id).map((m) => [m.id, m.name + " · " + (m.title || m.dept)]);
+    const templates = S.db.onboardingTemplates.map((t) => [t.id, t.name]);
+    ui.formModal("Approve — " + u.name, [
+      { name: "email", label: "Email", type: "readonly", value: u.email },
+      { name: "phone", label: "Phone", type: "readonly", value: u.phone || "—" },
+      { name: "portalType", label: "Portal type", type: "select", required: true, options: [["staff", "Staff"], ["contractor", "Contractor"], ["client", "Client"]] },
+      { name: "dept", label: "Department", type: "select", options: ["Executive", "Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration", "Contractors"], hint: "Staff / contractor only" },
+      { name: "role", label: "Role", type: "select", options: Object.entries(OM.ROLES).filter(([k]) => k !== "client").map(([k, v]) => [k, v.label]), hint: "Staff / contractor only" },
+      { name: "title", label: "Title", placeholder: "e.g. Editor II" },
+      { name: "company", label: "Company", placeholder: "Company name", hint: "Client only" },
+      { name: "clientId", label: "Assigned client", type: "select", options: [["", "— None —"]].concat(clients), hint: "Client only — which company this contact belongs to" },
+      { name: "projectId", label: "Assigned project", type: "select", options: [["", "— None —"]].concat(projects), hint: "Staff only — adds them to the project team" },
+      { name: "managerId", label: "Manager", type: "select", options: [["", "— None —"]].concat(managers) },
+      { name: "permissionGroup", label: "Permission group", placeholder: "e.g. Standard Staff, Department Head" },
+      { name: "onboardingTemplateId", label: "Onboarding template", type: "select", options: [["", "— None —"]].concat(templates), hint: "Assigns the checklist immediately (staff only)" },
+      { name: "notes", label: "Notes", type: "textarea", span2: true, hint: "Saved as an HR note — visible only to HR and executives" },
+    ], (v, close) => {
+      if (!v.portalType) throw new Error("Choose a portal type.");
+      return S.approveUser(u.id, v).then(() => {
+        close(); ui.toast(u.name + " approved and placed.", "good"); OM.router.refresh();
+      });
+    }, { wide: true, submitLabel: "Approve & place" });
+  }
 
   function hrEmployeeModal(u) {
     const rev = S.db.reviews.filter((r) => r.userId === u.id);
     const to = S.db.timeOff.filter((t) => t.userId === u.id);
     const acts = S.db.hrActions.filter((a) => a.userId === u.id);
     const me = S.me();
-    const canEdit = S.isExec(me) || me.dept === "Human Resources";
+    const isHr = S.isExec(me) || me.dept === "Human Resources";
+    // hr_notes are only queryable at all for HR/exec (RLS), so a non-HR
+    // viewer's S.db.hrNotes is simply empty — nothing to further hide here.
+    const notes = isHr ? S.db.hrNotes.filter((n) => n.profileId === u.id) : [];
+    const onboarding = S.db.onboardingAssignments.find((a) => a.profileId === u.id);
+    const manager = u.managerId && S.find("user", u.managerId);
     const m = ui.modal(u.name, `
       <div class="detail-grid">
         <div><span class="detail-label">Title</span><b>${esc(u.title || "—")}</b></div>
-        <div><span class="detail-label">Department</span><b>${esc(u.dept)}</b></div>
-        <div><span class="detail-label">Role</span><b>${OM.ROLES[u.role].label}</b></div>
+        <div><span class="detail-label">Department</span><b>${esc(u.dept || "—")}</b></div>
+        <div><span class="detail-label">Role</span><b>${u.role ? OM.ROLES[u.role].label : "—"}</b></div>
+        <div><span class="detail-label">Portal / employment</span><b>${U.cap(u.portalType || "—")}${u.employmentType ? " · " + U.cap(u.employmentType) : ""}</b></div>
+        <div><span class="detail-label">Manager</span><b>${manager ? esc(manager.name) : "—"}</b></div>
         <div><span class="detail-label">Hired</span><b>${U.date(u.hireDate)}</b></div>
-        <div><span class="detail-label">Compensation</span><b>${u.salary ? U.money(u.salary) + "/yr" : u.rate ? "$" + u.rate + "/hr" : "—"}</b></div>
+        <div><span class="detail-label">Compensation</span><b>${isHr || S.isExec(me) || me.dept === "Finance" ? (u.salary ? U.money(u.salary) + "/yr" : u.rate ? "$" + u.rate + "/hr" : "—") : "—"}</b></div>
         <div><span class="detail-label">Contact</span><b>${esc(u.email)}</b></div>
       </div>
-      ${u.role === "intern" && u.dept === "Unassigned" ? `<div class="inline-note">This member hasn't been placed yet. Assign their role and department to give them the right access.</div>` : ""}
-      <h4 class="modal-sub">Reviews</h4>${rev.map((r) => `<div class="list-row"><span class="list-main">${esc(r.period)} — score <b>${r.score}</b></span><span class="muted">${esc(r.summary)}</span></div>`).join("") || '<p class="muted">None.</p>'}
+      ${onboarding ? `<h4 class="modal-sub">Onboarding</h4><div class="list-row"><span class="list-main">${(onboarding.tasks || []).filter((t) => t.done).length}/${(onboarding.tasks || []).length} tasks complete</span>${ui.badge(onboarding.approvedAt ? "approved" : "in_progress")}</div>` : ""}
+      <h4 class="modal-sub">Reviews</h4>${rev.map((r) => `<div class="list-row"><span class="list-main">${esc(r.period || "")} — final rating <b>${r.finalRating ?? r.score ?? "—"}</b></span><span class="muted">${esc(r.summary || "")}</span></div>`).join("") || '<p class="muted">None.</p>'}
       <h4 class="modal-sub">Time off</h4>${to.map((t) => `<div class="list-row"><span class="list-main">${esc(t.type)} · ${U.dateShort(t.start)} → ${U.dateShort(t.end)}</span>${ui.badge(t.status)}</div>`).join("") || '<p class="muted">None.</p>'}
-      ${acts.length ? `<h4 class="modal-sub">Records</h4>` + acts.map((a) => `<div class="list-row"><span class="list-main">${U.cap(a.type)} — ${esc(a.summary)}</span>${ui.badge(a.status)}</div>`).join("") : ""}`,
-      { wide: true, footer: canEdit ? `<button class="btn btn-ghost" data-role="cancel2">Close</button><button class="btn btn-gold" id="editMember">Edit member</button>` : "" });
-    if (canEdit) {
+      ${acts.length ? `<h4 class="modal-sub">Records</h4>` + acts.map((a) => `<div class="list-row"><span class="list-main">${U.cap(a.type)} — ${esc(a.summary)}</span>${ui.badge(a.status)}</div>`).join("") : ""}
+      ${isHr ? `<h4 class="modal-sub">HR notes <span class="muted">— visible only to HR &amp; executives</span></h4>
+        ${notes.map((n) => `<div class="list-row"><span class="list-main"><span class="muted">${U.cap(n.category)} · ${U.date(n.createdAt)} · ${esc(S.userName(n.authorId))}</span><br>${esc(n.body)}</span></div>`).join("") || '<p class="muted">None.</p>'}
+        <div class="row-gap"><input type="text" id="hrNoteInput" placeholder="Add a note…" style="flex:1"><button class="btn btn-ghost btn-sm" id="addHrNote">Add note</button></div>` : ""}`,
+      { wide: true, footer: isHr ? `<button class="btn btn-ghost" data-role="cancel2">Close</button><button class="btn btn-gold" id="editMember">Edit member</button>` : "" });
+    if (isHr) {
       const c2 = m.el.querySelector('[data-role="cancel2"]'); if (c2) c2.addEventListener("click", m.close);
       m.el.querySelector("#editMember").addEventListener("click", () => { m.close(); editMemberModal(u); });
+      const addBtn = m.el.querySelector("#addHrNote");
+      if (addBtn) addBtn.addEventListener("click", () => {
+        const input = m.el.querySelector("#hrNoteInput");
+        if (!input.value.trim()) return;
+        S.create("hrNote", { profileId: u.id, category: "general", authorId: S.meId, body: input.value.trim() }, "Added HR note — " + u.name);
+        m.close(); ui.toast("Note added.", "good"); hrEmployeeModal(u);
+      });
     }
   }
 
   function editMemberModal(u) {
     const me = S.me();
     const canPay = S.isExec(me) || me.dept === "Finance";
+    const managers = S.db.users.filter((m) => m.status === "active" && m.id !== u.id).map((m) => [m.id, m.name + " · " + (m.title || m.dept)]);
     const fields = [
       { name: "name", label: "Name", value: u.name, required: true },
       { name: "title", label: "Title", value: u.title || "" },
       { name: "dept", label: "Department", type: "select", value: u.dept, options: ["Executive", "Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration", "Contractors", "Unassigned"] },
-      { name: "role", label: "Role", type: "select", value: u.role, options: Object.entries(OM.ROLES).map(([k, v]) => [k, v.label]) },
+      { name: "role", label: "Role", type: "select", value: u.role, options: Object.entries(OM.ROLES).filter(([k]) => k !== "client").map(([k, v]) => [k, v.label]) },
+      { name: "managerId", label: "Manager", type: "select", value: u.managerId || "", options: [["", "— None —"]].concat(managers) },
+      { name: "employmentType", label: "Employment type", type: "select", value: u.employmentType || "", options: [["", "— Not set —"], ["full_time", "Full-time"], ["part_time", "Part-time"], ["contract", "Contract"], ["intern", "Internship"]] },
+      { name: "payType", label: "Pay type", type: "select", value: u.payType || "", options: [["", "— Not set —"], ["salary", "Salary"], ["hourly", "Hourly"], ["project", "Per-project"]] },
       { name: "status", label: "Status", type: "select", value: u.status, options: [["active", "Active"], ["offboarded", "Offboarded"]] },
     ];
     if (canPay) {
@@ -326,7 +521,10 @@
       fields.push({ name: "rate", label: "Hourly rate ($)", type: "number", value: u.rate || "", hint: "For contractors" });
     }
     ui.formModal("Edit " + u.name, fields, (v, close) => {
-      S.updateProfile(u.id, { name: v.name, title: v.title, dept: v.dept, role: v.role, status: v.status }, "Placed " + v.name + " as " + OM.ROLES[v.role].label + " · " + v.dept);
+      S.updateProfile(u.id, {
+        name: v.name, title: v.title, dept: v.dept, role: v.role, status: v.status,
+        managerId: v.managerId || null, employmentType: v.employmentType || null, payType: v.payType || null,
+      }, "Placed " + v.name + " as " + OM.ROLES[v.role].label + " · " + v.dept);
       if (canPay && (v.salary !== "" || v.rate !== "")) S.setCompensation(u.id, v.salary !== "" ? +v.salary : null, v.rate !== "" ? +v.rate : null);
       close(); ui.toast(v.name + " updated.", "good"); OM.router.refresh();
     }, { wide: true });
@@ -587,6 +785,7 @@
     const me = S.me();
     const myTimeOff = S.db.timeOff.filter((t) => t.userId === me.id);
     const myAudit = S.db.audit.filter((a) => a.userId === me.id).slice(-10).reverse();
+    const myReviews = S.db.reviews.filter((r) => r.userId === me.id && r.status === "approved");
     el.innerHTML = ui.pageHead("Profile & settings", "") +
       `<div class="grid-2"><div>` +
       ui.sectionCard("My profile", `
@@ -617,6 +816,9 @@
       ui.sectionCard("My time off", myTimeOff.map((t) => `<div class="list-row"><span class="list-main">${esc(t.type)} · ${U.dateShort(t.start)} → ${U.dateShort(t.end)}</span>${ui.badge(t.status)}</div>`).join("") + `
         <div class="row-gap"><button class="btn btn-gold btn-sm" id="reqTO">+ Request time off</button></div>`) +
       `</div><div>` +
+      (myReviews.length ? ui.sectionCard("My reviews", myReviews.map((r) => `
+        <div class="list-row"><span class="list-main"><b>${U.cap(r.reviewType || "review")} — ${esc(r.period || "")}</b><span class="muted">Reviewer: ${esc(S.userName(r.reviewerId))} · Final rating ${esc(r.finalRating || r.score || "—")}</span></span>
+        ${r.acknowledgedAt ? ui.badge("acknowledged") : `<button class="btn btn-gold btn-sm" data-ack="${r.id}">Acknowledge</button>`}</div>`).join("")) : "") +
       ui.sectionCard("What my role can do", permSummary(me)) +
       ui.sectionCard("My recent activity", ui.timeline(myAudit.map((a) => ({ ts: a.ts, title: esc(a.summary) })))) +
       ui.sectionCard("Session", `<p class="muted">You're signed in as ${esc(me.email)}. Your workspace data is stored securely in the cloud and shared with your team in real time.</p>
@@ -634,7 +836,7 @@
       S.notify([S.deptHeadId(me.dept)].filter(Boolean), "hr", "Time off request: " + me.name, v.days + "d " + v.type, "#/approvals");
       close(); ui.toast("Request submitted for approval.", "good"); OM.router.refresh();
     }));
-    el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; location.reload(); });
+    el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; OM.renderLogin(); });
 
     el.querySelector("#profileForm").addEventListener("submit", (e) => {
       e.preventDefault();
@@ -663,6 +865,11 @@
         avatarWrap.classList.remove("uploading");
       }
     });
+
+    el.querySelectorAll("[data-ack]").forEach((b) => b.addEventListener("click", () => {
+      try { S.acknowledgeReview(b.dataset.ack); ui.toast("Review acknowledged.", "good"); OM.router.refresh(); }
+      catch (e) { ui.toast(e.message, "bad"); }
+    }));
   };
 
   function permSummary(me) {

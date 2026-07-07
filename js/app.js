@@ -328,7 +328,39 @@
     },
     refresh() { router.render(); },
   });
-  window.addEventListener("hashchange", () => { if (S.meId) router.render(); });
+  window.addEventListener("hashchange", () => {
+    if (!S.meId) return;
+    const me = S.me();
+    if (me && me.portalType === "client") OM.client.router.render();
+    else if (me && me.status === "active") router.render();
+  });
+
+  /* ---------------- PENDING / REVOKED HOLDING SCREENS ---------------- */
+  function renderPending() {
+    const me = S.me();
+    document.body.className = "auth-body";
+    document.body.innerHTML = `
+      <div class="boot">
+        <div class="brand-mark xl">O</div>
+        <h2>Almost there, ${esc((me.name || "").split(" ")[0] || "there")}</h2>
+        <p class="muted">Your account has been created but hasn't been approved yet. An administrator needs to assign your access before you can sign in — you'll get an email once that happens.</p>
+        <button class="btn btn-ghost" onclick="location.reload()">Check again</button>
+        <button class="btn btn-ghost" id="pendingSignOut">Sign out</button>
+      </div>`;
+    document.getElementById("pendingSignOut").addEventListener("click", async () => { await S.signOut(); renderLogin(); });
+  }
+
+  function renderRevoked() {
+    document.body.className = "auth-body";
+    document.body.innerHTML = `
+      <div class="boot">
+        <div class="brand-mark xl">O</div>
+        <h2>Access no longer available</h2>
+        <p class="muted">This account no longer has access to Oakframe Media OS. If you believe this is a mistake, contact your administrator.</p>
+        <button class="btn btn-ghost" id="revokedSignOut">Sign out</button>
+      </div>`;
+    document.getElementById("revokedSignOut").addEventListener("click", async () => { await S.signOut(); renderLogin(); });
+  }
 
   /* ---------------- AUTH SCREEN ---------------- */
   let authMode = "signin"; // or "signup"
@@ -438,8 +470,17 @@
       let tries = 0;
       while (!S.me() && tries < 5) { await new Promise((r) => setTimeout(r, 400)); await S.hydrate(); tries++; }
       if (!S.me()) throw new Error("Your profile isn't ready yet. Refresh in a moment.");
+      const me = S.me();
+      if (me.status === "pending" || me.portalType === "unassigned") { renderPending(); return; }
+      if (me.status === "offboarded") { renderRevoked(); return; }
+      if (me.portalType === "client") {
+        if (!location.hash || location.hash === "#" || !/^#\/c\//.test(location.hash)) location.hash = "#/c/";
+        OM.client.renderShell();
+        OM.client.router.render();
+        return;
+      }
       S.touchPresence();
-      if (!location.hash || location.hash === "#") location.hash = "#/";
+      if (!location.hash || location.hash === "#" || /^#\/c\//.test(location.hash)) location.hash = "#/";
       renderShell();
       router.render();
     } catch (ex) {
@@ -465,5 +506,6 @@
   }
 
   OM.enterApp = enterApp;
+  OM.renderLogin = renderLogin;
   document.addEventListener("DOMContentLoaded", boot);
 })();

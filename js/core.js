@@ -90,6 +90,7 @@
     junior: { label: "Junior Staff", level: 40 },
     contractor: { label: "Contractor", level: 30 },
     intern: { label: "Intern", level: 20 },
+    client: { label: "Client", level: 10 },
   });
   const lvl = (role) => (ROLES[role] || { level: 0 }).level;
 
@@ -114,7 +115,7 @@
     async resync(...colls) {
       for (const c of colls) {
         const entity = Object.keys(OM.ENTITIES).find((k) => OM.ENTITIES[k].coll === c);
-        if (entity) S.db[c] = await OM.db.refreshColl(c);
+        if (entity) S.db[c] = await OM.db.refreshColl(entity);
       }
     },
     save() { /* persistence is now per-mutation against Supabase; no-op kept
@@ -125,6 +126,9 @@
     user(id) { return S.db && S.db.users.find((u) => u.id === id); },
     userName(id) { const u = S.user(id); return u ? u.name : "System"; },
     isExec(u) { return !!(u && ROLES[u.role] && ROLES[u.role].exec); },
+    isClient(u) { u = u || S.me(); return !!(u && u.portalType === "client" && u.status === "active"); },
+    isStaff(u) { u = u || S.me(); return !!(u && (u.portalType === "staff" || u.portalType === "contractor") && u.status === "active"); },
+    isPending(u) { u = u || S.me(); return !!(u && u.status === "pending"); },
 
     uid() { return (crypto && crypto.randomUUID) ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8); },
     nextInvoiceNumber() { return "INV-" + (S.db.counters.inv++); },
@@ -171,6 +175,12 @@
     moduleAccess(mod, u) {
       u = u || S.me();
       if (!u) return false;
+      // Defense in depth: RLS already makes a pending or client account's
+      // queries against staff tables come back empty, but the staff shell/
+      // routes should never even attempt to render for one of these — a
+      // client typing a staff URL by hand should bounce immediately, not
+      // land on a page that quietly shows nothing.
+      if (u.status !== "active" || u.portalType === "client") return false;
       const exec = S.isExec(u);
       const role = u.role, dept = u.dept;
       switch (mod) {
@@ -284,7 +294,14 @@
         }
         case "candidate": case "review": case "hrAction": case "employee": {
           if (dept !== "Human Resources") {
-            if (entity === "review" && rec && (own(rec, "userId") || own(rec, "reviewerId"))) return action === "view" || (action === "edit" && own(rec, "reviewerId"));
+            if (entity === "review") {
+              if (rec && (own(rec, "userId") || own(rec, "reviewerId"))) return action === "view" || (action === "edit" && own(rec, "reviewerId"));
+              if (role === "dept_head" && (action === "create" || action === "view")) return true;
+              // Assigned managers may write a review for their own direct report.
+              const target = rec && rec.userId && S.find("user", rec.userId);
+              if ((action === "create" || action === "view") && target && target.managerId === u.id) return true;
+              return false;
+            }
             if (entity === "candidate" && role === "dept_head") return action === "view";
             return false;
           }
@@ -340,6 +357,29 @@
         }
         case "initiative": case "risk": case "boardNote":
           return false; // exec only
+        case "hrNote": case "onboardingTemplate": case "onboardingAssignment":
+          return dept === "Human Resources";
+        case "deliverable": {
+          if (action === "view") return !rec || role === "dept_head" || inMyProjects(rec.projectId);
+          if (action === "create") return role === "dept_head" || ["Production", "Creative"].includes(dept);
+          if (action === "edit") return role === "dept_head" || (rec && own(rec, "uploadedBy")) || inMyProjects(rec && rec.projectId);
+          return false; // delete = dept_head/exec only (handled by exec bypass above)
+        }
+        case "contract":
+          if (action === "view") return dept === "Sales" || role === "dept_head" || inMyProjects(rec && rec.projectId);
+          if (action === "create") return dept === "Sales" || role === "dept_head" || role === "project_lead";
+          return dept === "Sales" || role === "dept_head"; // status transitions match contracts_update_staff — project leads can draft but not move the chain
+        case "proposal":
+          if (action === "create") return dept === "Sales" || role === "dept_head" || role === "project_lead";
+          return dept === "Sales" || role === "dept_head";
+        case "clientMessage":
+          // The real recipient-scoping gate (client -> only assigned staff,
+          // staff -> only clients they're assigned to) lives in RLS via
+          // staff_assigned_to_client()/client_assigned_staff_ids(); this just
+          // lets either side attempt the write, and self-scopes a client to
+          // their own company's messages.
+          if (u.portalType === "client") return action === "view" || (action === "create" && (!rec || rec.clientId === u.clientId));
+          return true;
         case "notification":
           return rec ? rec.userId === u.id : true;
         case "user":
@@ -434,6 +474,8 @@
         await OM.db.from("invoice_items").insert(data.items.map((it) => ({ invoice_id: data.id, description: it.desc, qty: it.qty, rate: it.rate })));
       } else if (entity === "initiative" && (data.keyResults || []).length) {
         await OM.db.from("key_results").insert(data.keyResults.map((k) => ({ initiative_id: data.id, text: k.text, done: k.done || 0, target: k.target || 1 })));
+      } else if (entity === "onboardingTemplate" && (data.tasks || []).length) {
+        await OM.db.from("onboarding_template_tasks").insert(data.tasks.map((t, i) => ({ template_id: data.id, text: t.text, category: t.category || "general", position: i })));
       }
     },
 
@@ -561,6 +603,79 @@
         if (OM.router) OM.router.refresh();
       })(), "Decide approval", ["approvals"]);
       return ap;
+    },
+
+    // ---------- pending-user approval (HR/exec) ----------
+    // Moves a pending signup into Staff/Contractor/Client with everything the
+    // approval form captures. All the real work (placement, project/onboarding
+    // assignment, notification, audit) happens inside approve_user() so it's
+    // atomic and can't be partially applied by a dropped connection mid-flow.
+    approveUser(userId, v) {
+      const me = S.me();
+      if (!(S.isExec(me) || me.dept === "Human Resources")) throw new Error("Only HR or an executive can approve a new user.");
+      return (async () => {
+        await OM.db.rpc("approve_user", {
+          p_user_id: userId, p_portal_type: v.portalType, p_role: v.role || null, p_dept: v.dept || null,
+          p_title: v.title || null, p_company: v.company || null, p_client_id: v.clientId || null,
+          p_project_id: v.projectId || null, p_permission_group: v.permissionGroup || null,
+          p_manager_id: v.managerId || null, p_onboarding_template_id: v.onboardingTemplateId || null, p_notes: v.notes || null,
+        });
+        await S.resync("users", "projects", "onboardingAssignments", "notifications");
+      })();
+    },
+
+    // Acknowledging is the reviewed employee's own action, distinct from the
+    // reviewer's edit rights — narrower than the generic update() permission
+    // check, so it gets its own assertion rather than reusing can("edit").
+    acknowledgeReview(id) {
+      const me = S.me();
+      const r = S.find("review", id);
+      if (!r || r.userId !== me.id) throw new Error("You can only acknowledge your own review.");
+      if (r.status !== "approved") throw new Error("This review hasn't been finalized yet.");
+      r.acknowledgedAt = Date.now();
+      S.audit("edit", "review", id, "Acknowledged review" + (r.period ? " — " + r.period : ""));
+      S._bg(OM.db.patch("review", id, { acknowledgedAt: r.acknowledgedAt }), "Acknowledge review", ["reviews"]);
+    },
+
+    // ---------- onboarding ----------
+    completeOnboardingTask(progressId, done) {
+      return OM.db.rpc("complete_onboarding_task", { p_progress_id: progressId, p_done: done })
+        .then(() => S.resync("onboardingAssignments"));
+    },
+    approveOnboarding(assignmentId) {
+      S.assertCan("edit", "onboardingAssignment", null);
+      return OM.db.rpc("approve_onboarding", { p_assignment_id: assignmentId })
+        .then(() => S.resync("onboardingAssignments", "notifications"));
+    },
+
+    // ---------- contracts ----------
+    markContractViewed(id) { return OM.db.rpc("mark_contract_viewed", { p_id: id }).then(() => S.resync("contracts")); },
+    signContract(id, signatureName) {
+      return OM.db.rpc("sign_contract", { p_id: id, p_signature_name: signatureName })
+        .then(() => S.resync("contracts", "notifications"));
+    },
+    countersignContract(id) {
+      return OM.db.rpc("countersign_contract", { p_id: id }).then(() => S.resync("contracts"));
+    },
+
+    // ---------- proposals ----------
+    markProposalViewed(id) { return OM.db.rpc("mark_proposal_viewed", { p_id: id }).then(() => S.resync("proposals")); },
+    acceptProposal(id) {
+      return OM.db.rpc("accept_proposal", { p_id: id })
+        .then(() => S.resync("proposals", "projects", "contracts", "invoices", "notifications"));
+    },
+    rejectProposal(id, reason) {
+      return OM.db.rpc("reject_proposal", { p_id: id, p_reason: reason || null }).then(() => S.resync("proposals", "notifications"));
+    },
+
+    // ---------- deliverables ----------
+    logDeliverableEvent(id, action, note, version) {
+      return OM.db.rpc("log_deliverable_event", { p_id: id, p_action: action, p_note: note || null, p_version: version || null })
+        .then(() => S.resync("deliverableEvents"));
+    },
+    clientReviewDeliverable(id, action, note) {
+      return OM.db.rpc("client_review_deliverable", { p_id: id, p_action: action, p_note: note || null })
+        .then(() => S.resync("deliverables", "deliverableEvents", "tasks", "notifications"));
     },
 
     // HR/exec place a member into their role, department, title, and status.
