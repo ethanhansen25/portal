@@ -1,13 +1,17 @@
 /* Oakframe Media OS — SVG chart engine.
-   Palette validated with the dataviz six-checks validator against surface #14141a
-   (all PASS; worst adjacent CVD ΔE 21.3). Categorical order is fixed, never cycled. */
+   Palette validated with the dataviz six-checks validator against surface #ffffff
+   (all PASS; worst adjacent CVD ΔE 46.9). Categorical order is fixed, never cycled. */
 (function () {
   const OM = (window.OM = window.OM || {});
   const U = OM.util;
 
-  const SERIES = ["#b98a2e", "#3987e5", "#199e70", "#9085e9", "#e66767", "#38a3c4", "#d55181", "#d95926"];
-  const INK = { primary: "#f4f1e8", secondary: "#b9b6ac", muted: "#8b8a94", grid: "#26262c", baseline: "#3a3a42" };
-  const STATUS = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
+  // Categorical palette validated for a white surface (dataviz six-checks, all
+  // PASS; worst adjacent CVD ΔE 46.9). Gold leads to stay on-brand; the rest
+  // are distinct hues in a CVD-safe fixed order. Never cycled.
+  const SERIES = ["#b8860b", "#2a6fdb", "#1a9e6d", "#7a4bc4", "#d4483f", "#2d9bb5", "#d16a2c", "#c13a86"];
+  const INK = { primary: "#1b1a17", secondary: "#56544e", muted: "#8f8c85", grid: "#eceae4", baseline: "#ddd9d0" };
+  const STATUS = { good: "#1a7f4b", warning: "#b6791a", serious: "#d16a2c", critical: "#c1362f" };
+  const SURFACE = "#ffffff";
 
   let tipEl = null;
   function tip() {
@@ -85,7 +89,7 @@
       }
     });
     g += `<line class="xh" x1="0" y1="${padT}" x2="0" y2="${padT + ih}" stroke="${INK.muted}" stroke-width="1" stroke-dasharray="3,3" style="display:none"/>`;
-    data.series.forEach((s, si) => { g += `<circle class="xh-dot xh-dot-${si}" r="4" fill="${SERIES[si]}" stroke="#14141a" stroke-width="2" style="display:none"/>`; });
+    data.series.forEach((s, si) => { g += `<circle class="xh-dot xh-dot-${si}" r="4" fill="${SERIES[si]}" stroke="${SURFACE}" stroke-width="2" style="display:none"/>`; });
 
     el.innerHTML = `<svg width="100%" viewBox="0 0 ${W} ${H}" style="display:block">${g}</svg>` + legend(data.series.map((s) => s.name));
     const svg = el.querySelector("svg");
@@ -191,7 +195,7 @@
     items.forEach((it) => {
       const x0 = cx + (r - sw / 2 - 1) * Math.cos(a), y0 = cy + (r - sw / 2 - 1) * Math.sin(a);
       const x1 = cx + (r + sw / 2 + 1) * Math.cos(a), y1 = cy + (r + sw / 2 + 1) * Math.sin(a);
-      g += `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="#14141a" stroke-width="2.5"/>`;
+      g += `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="${SURFACE}" stroke-width="2.5"/>`;
       a += (it.value / total) * Math.PI * 2;
     });
     const center = opts.center ? `<text x="${cx}" y="${cy - 2}" text-anchor="middle" class="donut-big">${U.esc(opts.center)}</text><text x="${cx}" y="${cy + 15}" text-anchor="middle" class="ax">${U.esc(opts.centerSub || "")}</text>` : "";

@@ -146,6 +146,85 @@
     return { close, el: wrap };
   }
 
+  /* ---------- CUSTOM DROPDOWN ----------
+     Renders as a hidden <input type="hidden"> (so FormData/formValues keep
+     working untouched) plus a styled trigger + menu. Call initDropdowns(root)
+     once the markup is in the DOM to wire up interactivity. */
+  let ddSeq = 0;
+  function dropdownHtml(name, opts, value, opts2 = {}) {
+    const id = "dd" + ddSeq++;
+    const selected = opts.find((o) => String(o[0]) === String(value));
+    const searchable = opts2.searchable !== false && opts.length > 7;
+    return `<div class="dropdown" id="${id}" data-name="${name}" ${opts2.required ? 'data-required="1"' : ""}>
+      <input type="hidden" name="${name}" value="${esc(value != null ? value : "")}">
+      <button type="button" class="dropdown-trigger"><span class="dd-value ${selected ? "" : "placeholder"}">${esc(selected ? selected[1] : (opts2.placeholder || "Select…"))}</span><span class="dropdown-caret">▾</span></button>
+      <div class="dropdown-menu">
+        ${searchable ? `<div class="dropdown-search"><input type="text" placeholder="Search…"></div>` : ""}
+        <div class="dropdown-options">${opts.map((o) => `<div class="dropdown-opt ${String(o[0]) === String(value) ? "selected" : ""}" data-value="${esc(o[0])}">${o[2] ? `<span class="list-icon">${o[2]}</span>` : ""}<span>${esc(o[1])}</span><span class="dd-check">✓</span></div>`).join("") || '<div class="dropdown-empty">No options</div>'}</div>
+      </div>
+    </div>`;
+  }
+  function initDropdowns(root) {
+    root.querySelectorAll(".dropdown").forEach((dd) => {
+      if (dd._ddInit) return; dd._ddInit = true;
+      const trigger = dd.querySelector(".dropdown-trigger");
+      const menu = dd.querySelector(".dropdown-menu");
+      const hidden = dd.querySelector('input[type="hidden"]');
+      const valueEl = dd.querySelector(".dd-value");
+      const search = dd.querySelector(".dropdown-search input");
+      const optsWrap = dd.querySelector(".dropdown-options");
+
+      const closeAll = () => document.querySelectorAll(".dropdown.open").forEach((o) => { if (o !== dd) o.classList.remove("open"); });
+      const open = () => {
+        closeAll();
+        dd.classList.add("open");
+        const r = dd.getBoundingClientRect();
+        dd.classList.toggle("up", r.bottom + 280 > window.innerHeight && r.top > 280);
+        if (search) { search.value = ""; filterOpts(""); setTimeout(() => search.focus(), 10); }
+      };
+      const close = () => dd.classList.remove("open");
+      trigger.addEventListener("click", (e) => { e.stopPropagation(); dd.classList.contains("open") ? close() : open(); });
+
+      function selectOpt(optEl) {
+        optsWrap.querySelectorAll(".dropdown-opt").forEach((o) => o.classList.remove("selected"));
+        optEl.classList.add("selected");
+        hidden.value = optEl.dataset.value;
+        valueEl.textContent = optEl.querySelector("span:not(.list-icon):not(.dd-check)").textContent;
+        valueEl.classList.remove("placeholder");
+        hidden.dispatchEvent(new Event("change", { bubbles: true }));
+        close();
+      }
+      optsWrap.addEventListener("click", (e) => { const o = e.target.closest(".dropdown-opt"); if (o) selectOpt(o); });
+
+      function filterOpts(q) {
+        q = q.toLowerCase();
+        let anyVisible = false;
+        optsWrap.querySelectorAll(".dropdown-opt").forEach((o) => {
+          const match = !q || o.textContent.toLowerCase().includes(q);
+          o.style.display = match ? "" : "none";
+          if (match) anyVisible = true;
+        });
+        let empty = optsWrap.querySelector(".dropdown-empty");
+        if (!anyVisible) { if (!empty) { empty = document.createElement("div"); empty.className = "dropdown-empty"; empty.textContent = "No matches."; optsWrap.appendChild(empty); } }
+        else if (empty) empty.remove();
+      }
+      if (search) search.addEventListener("input", () => filterOpts(search.value));
+
+      dd.addEventListener("keydown", (e) => {
+        // Stop here so an Escape meant for the dropdown doesn't bubble up and
+        // also trigger the modal's own Escape-to-close handler on document.
+        if (e.key === "Escape" && dd.classList.contains("open")) { e.stopPropagation(); close(); trigger.focus(); }
+        if (e.key === "Enter" && !dd.classList.contains("open")) { e.preventDefault(); open(); }
+      });
+    });
+    // one shared document-level outside-click / escape handler
+    if (!window._ddDocBound) {
+      window._ddDocBound = true;
+      document.addEventListener("click", (e) => { if (!e.target.closest(".dropdown")) document.querySelectorAll(".dropdown.open").forEach((d) => d.classList.remove("open")); });
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll(".dropdown.open").forEach((d) => d.classList.remove("open")); });
+    }
+  }
+
   /* ---------- FORM BUILDER ----------
      fields: [{name,label,type(text|number|textarea|select|date|user|readonly),options,value,required,placeholder,hint,span2}] */
   function form(fields, submitLabel = "Save") {
@@ -159,10 +238,15 @@
           const opts = f.type === "user"
             ? [["", "— Unassigned —"]].concat(OM.store.db.users.filter((u) => u.status === "active" && (!f.filter || f.filter(u))).map((u) => [u.id, u.name + " · " + u.title]))
             : f.options.map((o) => Array.isArray(o) ? o : [o, U.cap(o)]);
-          input = `<select name="${f.name}" ${req}>${opts.map((o) => `<option value="${esc(o[0])}" ${String(f.value) === String(o[0]) ? "selected" : ""}>${esc(o[1])}</option>`).join("")}</select>`;
+          input = dropdownHtml(f.name, opts, f.value, { placeholder: f.placeholder, required: f.required });
         } else if (f.type === "readonly") input = `<div class="form-readonly">${esc(f.value || "—")}</div>`;
         else input = `<input type="${f.type || "text"}" name="${f.name}" ${req} value="${esc(f.value != null ? f.value : "")}" placeholder="${esc(f.placeholder || "")}" ${f.step ? `step="${f.step}"` : ""}>`;
-        return `<label class="form-field ${f.span2 ? "span2" : ""}"><span class="form-label">${esc(f.label)}${f.required ? " *" : ""}</span>${input}${f.hint ? `<span class="form-hint">${esc(f.hint)}</span>` : ""}</label>`;
+        // A <div>, not <label>: wrapping the custom dropdown in a <label> with
+        // no `for` makes the browser forward stray clicks to the label's
+        // implicit associated control (the trigger button, since the hidden
+        // input is skipped for being type=hidden) — reopening it right after
+        // an option click closes it.
+        return `<div class="form-field ${f.span2 ? "span2" : ""}"><span class="form-label">${esc(f.label)}${f.required ? " *" : ""}</span>${input}${f.hint ? `<span class="form-hint">${esc(f.hint)}</span>` : ""}</div>`;
       }).join("")}
       </div>
       <div class="form-actions"><button type="submit" class="btn btn-gold">${esc(submitLabel)}</button></div>
@@ -178,15 +262,23 @@
     return modal(title, form(fields, opts.submitLabel || "Save"), {
       wide: opts.wide,
       onMount(wrap, close) {
-        wrap.querySelector("form").addEventListener("submit", (e) => {
+        initDropdowns(wrap);
+        const formEl = wrap.querySelector("form");
+        formEl.addEventListener("submit", (e) => {
           e.preventDefault();
+          const missing = [...formEl.querySelectorAll('.dropdown[data-required="1"]')].find((d) => !d.querySelector('input[type="hidden"]').value);
+          if (missing) {
+            toast("Please choose a value for every required field.", "bad");
+            missing.querySelector(".dropdown-trigger").focus();
+            return;
+          }
           try {
-            onSubmit(formValues(e.target), close);
+            onSubmit(formValues(formEl), close);
           } catch (err) {
             toast(err.message, "bad");
           }
         });
-        const first = wrap.querySelector("input, textarea, select");
+        const first = wrap.querySelector("input:not([type=hidden]), textarea");
         if (first) first.focus();
       },
     });
@@ -287,5 +379,5 @@
 
   const KIND_ICONS = { call: "☎", email: "✉", meeting: "◫", sms: "▤", voice_note: "♪", note: "✎", task: "☑", approval: "✓", finance: "$", sales: "▲", project: "▣", hr: "☺", equipment: "⚙", mention: "@", deadline: "⏱" };
 
-  OM.ui = { badge, avatar, userCell, kpi, table, modal, form, formValues, formModal, confirmModal, toast, tabs, kanban, sectionCard, empty, skeleton, pageHead, timeline, KIND_ICONS, STATUS_TONES };
+  OM.ui = { badge, avatar, userCell, kpi, table, modal, form, formValues, formModal, confirmModal, toast, tabs, kanban, sectionCard, empty, skeleton, pageHead, timeline, dropdownHtml, initDropdowns, KIND_ICONS, STATUS_TONES };
 })();
