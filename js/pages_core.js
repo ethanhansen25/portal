@@ -648,7 +648,10 @@
     const cDocs = S.db.documents.filter((d) => d.clientId === c.id && S.can("view", "document", d));
     const cTasks = S.db.tasks.filter((t) => cProjects.some((p) => p.id === t.projectId));
     const cMeetings = S.db.meetings.filter((m) => m.clientId === c.id);
+    const cContracts = S.db.contracts.filter((k) => k.clientId === c.id);
+    const cProposals = S.db.proposals.filter((k) => k.clientId === c.id);
     const showFinance = S.isExec(me) || S.moduleAccess("finance") || me.dept === "Sales";
+    const canSeeContracts = S.can("view", "contract", { projectId: null }) || cProjects.some((p) => S.can("view", "contract", { projectId: p.id }));
     const revenueYTD = M.revenueByClientYTD().find((r) => r.client.id === c.id);
 
     el.innerHTML = ui.pageHead(esc(c.name),
@@ -660,6 +663,7 @@
       { id: "overview", label: "Overview" }, { id: "contacts", label: "Contacts", count: cContacts.length },
       { id: "projects", label: "Projects", count: cProjects.length },
       showFinance ? { id: "invoices", label: "Invoices", count: cInvoices.length } : null,
+      canSeeContracts ? { id: "contracts", label: "Contracts & Proposals", count: cContracts.length + cProposals.length } : null,
       { id: "comms", label: "Communications", count: cComms.length },
       { id: "files", label: "Files", count: cDocs.length }, { id: "notes", label: "Notes" },
     ].filter(Boolean);
@@ -709,6 +713,8 @@
           { key: "status", label: "Status", render: (i) => ui.badge(i.status) },
         ],
       });
+    } else if (tab === "contracts") {
+      renderContractsProposals(body, c, cContracts, cProposals, cProjects);
     } else if (tab === "comms") {
       renderCommsPanel(body, () => S.db.comms.filter((x) => x.clientId === c.id), { clientId: c.id });
     } else if (tab === "files") {
@@ -727,6 +733,149 @@
       });
     }
   };
+
+  /* ================= CONTRACTS & PROPOSALS (staff-side) =================
+     Contract: Draft -> Internal Review -> Approved to Send -> Sent -> (client
+     views/signs) -> staff Countersigns -> Active -> Expired/Archived.
+     Proposal: Draft -> Internal Review -> Approved -> Sent -> (client
+     accepts/rejects — accepting spawns a project/contract/invoice via the
+     accept_proposal RPC). CEO/CFO/exec sign-off is required for the two
+     approval transitions, matching "CEO/CFO/Executive approve" in the spec. */
+  const CONTRACT_NEXT = {
+    draft: [["internal_review", "Submit for review"]],
+    internal_review: [["approved_to_send", "Approve to send"], ["draft", "Send back"]],
+    approved_to_send: [["sent", "Send to client"]],
+    sent: [], viewed: [], signed: [], countersigned: [], active: [], expired: [], archived: [],
+  };
+  const PROPOSAL_NEXT = {
+    draft: [["internal_review", "Submit for review"]],
+    internal_review: [["approved", "Approve"], ["draft", "Send back"]],
+    approved: [["sent", "Send to client"]],
+    sent: [], viewed: [], accepted: [], rejected: [], expired: [],
+  };
+  function canFireExecTransition(status, next) {
+    const me = S.me();
+    if ((status === "internal_review" && (next === "approved_to_send" || next === "approved"))) return S.isExec(me);
+    return true;
+  }
+
+  function renderContractsProposals(body, c, contracts, proposals, projects) {
+    const canCreate = S.can("create", "proposal", null);
+    body.innerHTML =
+      ui.sectionCard("Proposals", proposals.map((p) => `
+        <div class="list-row clickable" data-proposal="${p.id}"><span class="list-icon">◈</span>
+          <span class="list-main"><b>${esc(p.title)}</b><span class="muted">${p.price ? U.money(p.price) : ""}</span></span>${ui.badge(p.status)}</div>`).join("")
+        || ui.empty("No proposals yet."), { action: canCreate ? '<button class="btn btn-gold btn-sm" id="newProposal">+ New proposal</button>' : "" }) +
+      ui.sectionCard("Contracts", contracts.map((k) => `
+        <div class="list-row clickable" data-contract="${k.id}"><span class="list-icon">✎</span>
+          <span class="list-main"><b>${esc(k.title)}</b><span class="muted">${k.signatureName ? "Signed by " + esc(k.signatureName) : ""}</span></span>${ui.badge(k.status)}</div>`).join("")
+        || ui.empty("No contracts yet."), { action: canCreate ? '<button class="btn btn-gold btn-sm" id="newContract">+ New contract</button>' : "" });
+
+    const np = body.querySelector("#newProposal");
+    if (np) np.addEventListener("click", () => ui.formModal("New proposal", [
+      { name: "title", label: "Title", required: true, span2: true },
+      { name: "scope", label: "Scope of work", type: "textarea", span2: true },
+      { name: "timeline", label: "Timeline", placeholder: "e.g. 6 weeks from kickoff" },
+      { name: "deliverablesSummary", label: "Deliverables", placeholder: "e.g. 3 videos, 10 photos" },
+      { name: "price", label: "Price ($)", type: "number", required: true },
+      { name: "paymentTerms", label: "Payment terms", placeholder: "e.g. 50% deposit, 50% on delivery" },
+      { name: "addons", label: "Optional add-ons", type: "textarea", span2: true },
+      { name: "expiresDays", label: "Expires in (days)", type: "number", value: 30 },
+    ], (v, close) => {
+      S.create("proposal", {
+        clientId: c.id, title: v.title, status: "draft", scope: v.scope, timeline: v.timeline,
+        deliverablesSummary: v.deliverablesSummary, price: +v.price, paymentTerms: v.paymentTerms, addons: v.addons,
+        createdBy: S.meId, expiresAt: v.expiresDays !== "" ? Date.now() + (+v.expiresDays) * U.DAY : null,
+      }, "Drafted proposal — " + v.title + " for " + c.name);
+      close(); ui.toast("Proposal drafted.", "good"); OM.router.refresh();
+    }, { wide: true }));
+
+    const nc = body.querySelector("#newContract");
+    if (nc) nc.addEventListener("click", () => ui.formModal("New contract", [
+      { name: "title", label: "Title", required: true, span2: true },
+      { name: "projectId", label: "Project", type: "select", options: [["", "— None —"]].concat(projects.map((p) => [p.id, p.code + " · " + p.name])) },
+      { name: "body", label: "Contract terms", type: "textarea", span2: true, rows: 8 },
+      { name: "expiresDays", label: "Expires in (days)", type: "number", value: 30 },
+    ], (v, close) => {
+      S.create("contract", {
+        clientId: c.id, projectId: v.projectId || null, title: v.title, status: "draft", body: v.body,
+        createdBy: S.meId, expiresAt: v.expiresDays !== "" ? Date.now() + (+v.expiresDays) * U.DAY : null,
+      }, "Drafted contract — " + v.title + " for " + c.name);
+      close(); ui.toast("Contract drafted.", "good"); OM.router.refresh();
+    }, { wide: true }));
+
+    body.querySelectorAll("[data-proposal]").forEach((row) => row.addEventListener("click", () => proposalDetailModal(S.find("proposal", row.dataset.proposal), c)));
+    body.querySelectorAll("[data-contract]").forEach((row) => row.addEventListener("click", () => contractDetailModal(S.find("contract", row.dataset.contract), c)));
+  }
+
+  function proposalDetailModal(pr, c) {
+    if (!pr) return;
+    const nextOptions = S.can("edit", "proposal", pr) ? (PROPOSAL_NEXT[pr.status] || []).filter(([next]) => canFireExecTransition(pr.status, next)) : [];
+    const m = ui.modal(pr.title, `
+      <div class="detail-grid">
+        <div><span class="detail-label">Status</span><b>${ui.badge(pr.status)}</b></div>
+        <div><span class="detail-label">Price</span><b>${pr.price ? U.money(pr.price) : "—"}</b></div>
+        <div><span class="detail-label">Timeline</span><b>${esc(pr.timeline || "—")}</b></div>
+        <div><span class="detail-label">Payment terms</span><b>${esc(pr.paymentTerms || "—")}</b></div>
+        <div><span class="detail-label">Sent</span><b>${pr.sentAt ? U.date(pr.sentAt) : "—"}</b></div>
+        <div><span class="detail-label">Responded</span><b>${pr.respondedAt ? U.date(pr.respondedAt) : "—"}</b></div>
+      </div>
+      ${pr.scope ? `<h4 class="modal-sub">Scope</h4><p class="body-text">${esc(pr.scope)}</p>` : ""}
+      ${pr.deliverablesSummary ? `<h4 class="modal-sub">Deliverables</h4><p class="body-text">${esc(pr.deliverablesSummary)}</p>` : ""}
+      ${pr.addons ? `<h4 class="modal-sub">Add-ons</h4><p class="body-text">${esc(pr.addons)}</p>` : ""}
+      ${pr.status === "accepted" ? `<div class="inline-note">Accepted — a project, contract, and invoice were generated automatically.</div>` : ""}
+    `, { wide: true, footer: nextOptions.map(([next, label]) => `<button class="btn ${next === "draft" ? "btn-ghost" : "btn-gold"}" data-next="${next}">${esc(label)}</button>`).join("") + `<button class="btn btn-ghost" data-role="cancel2">Close</button>` });
+    m.el.querySelector('[data-role="cancel2"]').addEventListener("click", m.close);
+    m.el.querySelectorAll("[data-next]").forEach((b) => b.addEventListener("click", () => {
+      const next = b.dataset.next;
+      const patch = { status: next };
+      if (next === "sent") patch.sentAt = Date.now();
+      S.update("proposal", pr.id, patch, "Moved proposal \"" + pr.title + "\" → " + U.cap(next));
+      if (next === "sent") {
+        const staffIds = S.db.users.filter((u) => u.portalType === "client" && u.clientId === c.id).map((u) => u.id);
+        if (staffIds.length) S.notify(staffIds, "proposal", "New proposal: " + pr.title, c.name, "#/c/proposals");
+      }
+      m.close(); ui.toast("Proposal moved to " + U.cap(next) + ".", "good"); OM.router.refresh();
+    }));
+  }
+
+  function contractDetailModal(k, c) {
+    if (!k) return;
+    const nextOptions = S.can("edit", "contract", k) ? (CONTRACT_NEXT[k.status] || []).filter(([next]) => canFireExecTransition(k.status, next)) : [];
+    const canCountersign = k.status === "signed" && S.isExec(S.me());
+    const m = ui.modal(k.title, `
+      <div class="detail-grid">
+        <div><span class="detail-label">Status</span><b>${ui.badge(k.status)}</b></div>
+        <div><span class="detail-label">Expires</span><b>${k.expiresAt ? U.date(k.expiresAt) : "—"}</b></div>
+        <div><span class="detail-label">Sent</span><b>${k.sentAt ? U.date(k.sentAt) : "—"}</b></div>
+        <div><span class="detail-label">Signed</span><b>${k.signedAt ? U.date(k.signedAt) + " by " + esc(k.signatureName || "") : "—"}</b></div>
+        <div><span class="detail-label">Countersigned</span><b>${k.countersignedAt ? U.date(k.countersignedAt) : "—"}</b></div>
+      </div>
+      ${k.body ? `<h4 class="modal-sub">Terms</h4><p class="body-text">${esc(k.body)}</p>` : ""}
+    `, {
+      wide: true,
+      footer: nextOptions.map(([next, label]) => `<button class="btn ${next === "draft" ? "btn-ghost" : "btn-gold"}" data-next="${next}">${esc(label)}</button>`).join("")
+        + (canCountersign ? `<button class="btn btn-gold" id="ctrCountersign">Countersign</button>` : "")
+        + `<button class="btn btn-ghost" data-role="cancel2">Close</button>`,
+    });
+    m.el.querySelector('[data-role="cancel2"]').addEventListener("click", m.close);
+    m.el.querySelectorAll("[data-next]").forEach((b) => b.addEventListener("click", () => {
+      const next = b.dataset.next;
+      const patch = { status: next };
+      if (next === "sent") patch.sentAt = Date.now();
+      S.update("contract", k.id, patch, "Moved contract \"" + k.title + "\" → " + U.cap(next));
+      if (next === "sent") {
+        const staffIds = S.db.users.filter((u) => u.portalType === "client" && u.clientId === c.id).map((u) => u.id);
+        if (staffIds.length) S.notify(staffIds, "contract", "New contract to review: " + k.title, c.name, "#/c/contracts");
+      }
+      m.close(); ui.toast("Contract moved to " + U.cap(next) + ".", "good"); OM.router.refresh();
+    }));
+    const cs = m.el.querySelector("#ctrCountersign");
+    if (cs) cs.addEventListener("click", () => {
+      S.countersignContract(k.id).then(() => { ui.toast("Contract countersigned — now active.", "good"); OM.router.refresh(); }).catch((e) => ui.toast(e.message, "bad"));
+      m.close();
+    });
+  }
 
   /* Shared communications panel (used on client profile + comms module) */
   const KINDS = [["call", "☎ Call"], ["email", "✉ Email"], ["meeting", "◫ Meeting"], ["sms", "▤ Text"], ["voice_note", "♪ Voice note"], ["note", "✎ Internal note"]];

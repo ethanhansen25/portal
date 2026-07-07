@@ -365,8 +365,13 @@
           if (action === "edit") return role === "dept_head" || (rec && own(rec, "uploadedBy")) || inMyProjects(rec && rec.projectId);
           return false; // delete = dept_head/exec only (handled by exec bypass above)
         }
-        case "contract": case "proposal":
-          return dept === "Sales";
+        case "contract":
+          if (action === "view") return dept === "Sales" || role === "dept_head" || inMyProjects(rec && rec.projectId);
+          if (action === "create") return dept === "Sales" || role === "dept_head" || role === "project_lead";
+          return dept === "Sales" || role === "dept_head"; // status transitions match contracts_update_staff — project leads can draft but not move the chain
+        case "proposal":
+          if (action === "create") return dept === "Sales" || role === "dept_head" || role === "project_lead";
+          return dept === "Sales" || role === "dept_head";
         case "notification":
           return rec ? rec.userId === u.id : true;
         case "user":

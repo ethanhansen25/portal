@@ -272,7 +272,7 @@
       const name = el.querySelector("#sigName").value.trim();
       if (!name) { ui.toast("Type your name to sign.", "bad"); return; }
       ui.confirmModal("Confirm signature", `Sign as "<b>${esc(name)}</b>"? This is a binding electronic signature.`, () => {
-        S.signContract(id, name).then(() => { ui.toast("Contract signed.", "good"); OM.router.refresh(); }).catch((e) => ui.toast(e.message, "bad"));
+        S.signContract(id, name).then(() => { ui.toast("Contract signed.", "good"); CP.router.refresh(); }).catch((e) => ui.toast(e.message, "bad"));
       }, { okLabel: "Sign" });
     });
   };
@@ -313,11 +313,11 @@
        p.status === "accepted" ? `<div class="inline-note">Accepted — your project, contract, and initial invoice are ready in their respective sections.</div>` : "");
     const ab = el.querySelector("#acceptBtn");
     if (ab) ab.addEventListener("click", () => ui.confirmModal("Accept proposal", "Accepting creates your project, a draft contract, and an initial invoice.", () => {
-      S.acceptProposal(id).then(() => { ui.toast("Proposal accepted! Your project is being set up.", "good"); OM.router.refresh(); }).catch((e) => ui.toast(e.message, "bad"));
+      S.acceptProposal(id).then(() => { ui.toast("Proposal accepted! Your project is being set up.", "good"); CP.router.refresh(); }).catch((e) => ui.toast(e.message, "bad"));
     }, { okLabel: "Accept" }));
     const rb = el.querySelector("#rejectBtn");
     if (rb) rb.addEventListener("click", () => ui.formModal("Decline proposal", [{ name: "reason", label: "Reason (optional)", type: "textarea", span2: true }], async (v, close) => {
-      await S.rejectProposal(id, v.reason); close(); ui.toast("Proposal declined.", "info"); OM.router.refresh();
+      await S.rejectProposal(id, v.reason); close(); ui.toast("Proposal declined.", "info"); CP.router.refresh();
     }));
   };
 
