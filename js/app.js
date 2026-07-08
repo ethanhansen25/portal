@@ -127,7 +127,7 @@
       <div class="shell ${railed ? "rail" : ""}" id="shell">
         <aside class="sidebar" id="sidebar">
           <div class="brand">
-            <div class="brand-mark" onclick="location.hash='#/'">O</div>
+            <div class="brand-mark" onclick="location.hash='#/'">${OM.icon("oakframeMark")}</div>
             <div class="brand-text" onclick="location.hash='#/'"><b>Oakframe</b><span>Media OS</span></div>
             <button class="sb-collapse" id="sbCollapse" title="Collapse sidebar">${railed ? "›" : "‹"}</button>
           </div>
@@ -361,7 +361,7 @@
     document.body.className = "auth-body";
     document.body.innerHTML = `
       <div class="boot">
-        <div class="brand-mark xl">O</div>
+        <div class="brand-mark xl">${OM.icon("oakframeMark")}</div>
         <h2>Almost there, ${esc((me.name || "").split(" ")[0] || "there")}</h2>
         <p class="muted">Your account has been created but hasn't been approved yet. An administrator needs to assign your access before you can sign in — you'll get an email once that happens.</p>
         <button class="btn btn-ghost" onclick="location.reload()">Check again</button>
@@ -374,7 +374,7 @@
     document.body.className = "auth-body";
     document.body.innerHTML = `
       <div class="boot">
-        <div class="brand-mark xl">O</div>
+        <div class="brand-mark xl">${OM.icon("oakframeMark")}</div>
         <h2>Access no longer available</h2>
         <p class="muted">This account no longer has access to Oakframe Media OS. If you believe this is a mistake, contact your administrator.</p>
         <button class="btn btn-ghost" id="revokedSignOut">Sign out</button>
@@ -390,7 +390,7 @@
       <div class="auth">
         <button class="icon-btn auth-theme-btn" id="authThemeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? OM.icon("sun") : OM.icon("moon")}</button>
         <div class="auth-aside">
-          <div class="auth-brand"><div class="brand-mark xl">O</div><span>Oakframe Media</span></div>
+          <div class="auth-brand"><div class="brand-mark xl">${OM.icon("oakframeMark")}</div><span>Oakframe Media</span></div>
           <div class="auth-pitch">
             <h1>The operating system<br>for how we work.</h1>
             <p>Projects, clients, sales, finance, people, and equipment — the entire studio in one calm, precise place.</p>
@@ -482,7 +482,7 @@
     if (!session) { renderLogin(); return; }
     S.meId = session.user.id;
     document.body.className = "";
-    document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">O</div><div class="boot-bar"><span></span></div><p>Loading your workspace…</p></div>`;
+    document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">${OM.icon("oakframeMark")}</div><div class="boot-bar"><span></span></div><p>Loading your workspace…</p></div>`;
     try {
       await S.hydrate();
       // A brand-new user may sign in a beat before the profile-creation trigger
@@ -504,7 +504,7 @@
       renderShell();
       router.render();
     } catch (ex) {
-      document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">O</div><p class="boot-error">${esc(friendlyAuthError(ex.message || String(ex)))}</p><button class="btn btn-ghost" onclick="location.reload()">Retry</button> <button class="btn btn-ghost" id="bootOut">Sign out</button></div>`;
+      document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">${OM.icon("oakframeMark")}</div><p class="boot-error">${esc(friendlyAuthError(ex.message || String(ex)))}</p><button class="btn btn-ghost" onclick="location.reload()">Retry</button> <button class="btn btn-ghost" id="bootOut">Sign out</button></div>`;
       const bo = document.getElementById("bootOut"); if (bo) bo.addEventListener("click", async () => { await S.signOut(); renderLogin(); });
     }
   }
@@ -522,7 +522,7 @@
   }
 
   function renderConfigError() {
-    document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">O</div><p class="boot-error">Backend not configured.</p><p class="muted">Add your Supabase project URL and publishable key to <code>js/config.js</code>, then reload.</p></div>`;
+    document.body.innerHTML = `<div class="boot"><div class="brand-mark xl">${OM.icon("oakframeMark")}</div><p class="boot-error">Backend not configured.</p><p class="muted">Add your Supabase project URL and publishable key to <code>js/config.js</code>, then reload.</p></div>`;
   }
 
   OM.enterApp = enterApp;

@@ -1,0 +1,14 @@
+{
+  "name": "oakframe-drive-import",
+  "private": true,
+  "version": "1.0.0",
+  "description": "One-time import of Oakframe's real Drive documents into the live Supabase project.",
+  "scripts": {
+    "import": "node import.js",
+    "dry-run": "node import.js --dry-run"
+  },
+  "dependencies": {
+    "googleapis": "^140.0.0",
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}
