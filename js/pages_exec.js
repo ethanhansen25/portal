@@ -272,4 +272,64 @@
       ui.sectionCard("Legal & compliance files", legalDocs.slice(0, 12).map((d) => `
         <div class="list-row"><span class="file-icon">${d.type.toUpperCase()}</span><span class="list-main"><b>${esc(d.name)}</b><span class="muted">${esc(d.category)} · ${U.date(d.uploadedAt)}</span></span>${d.confidential ? '<span class="badge tone-bad">Confidential</span>' : ""}</div>`).join(""));
   };
+
+  /* ================= ONBOARDING LIBRARY (exec-managed) ================= */
+  // A master library of contracts/documents/templates for staff AND client
+  // onboarding, distinct from the per-assignment files uploaded during an
+  // actual onboarding (onboarding_files, 0013). Upload/delete is exec-only;
+  // the "audience" tag is what surfaces a file on the staff self-service
+  // onboarding card (pages_core.js) and the client onboarding widget
+  // (pages_client.js) — RLS (0014) scopes reads to match.
+  const ONB_CAT_LABEL = { contract: "Contract", document: "Document", template: "Template" };
+  const ONB_AUD_LABEL = { staff: "Staff only", client: "Client only", both: "Staff & client" };
+  OM.pages.execOnboarding = function (el) {
+    if (!gate(el)) return;
+    function draw() {
+      const resources = S.db.onboardingResources.slice().sort((a, b) => b.uploadedAt - a.uploadedAt);
+      el.innerHTML = ui.pageHead("Onboarding library", "Contracts, documents, and templates for staff and client onboarding — upload once, it shows up on their onboarding checklist automatically",
+          `<button class="btn btn-gold" id="newOnbResource">+ Upload file</button>`) +
+        ui.kpi([
+          { label: "Total files", value: resources.length },
+          { label: "Contracts", value: resources.filter((r) => r.category === "contract").length },
+          { label: "Templates", value: resources.filter((r) => r.category === "template").length },
+          { label: "For staff", value: resources.filter((r) => r.audience !== "client").length },
+          { label: "For clients", value: resources.filter((r) => r.audience !== "staff").length },
+        ]) +
+        ui.sectionCard("Files", resources.map((r) => `
+          <div class="list-row">
+            <span class="list-icon">${OM.icon("file")}</span>
+            <span class="list-main"><b>${esc(r.name)}</b><span class="muted">${esc(ONB_CAT_LABEL[r.category] || r.category)} · ${esc(ONB_AUD_LABEL[r.audience] || r.audience)} · ${U.date(r.uploadedAt)} · ${esc(S.userName(r.uploadedBy))}</span></span>
+            <button class="btn btn-ghost btn-sm" data-dl-onb-res="${r.id}">Download</button>
+            <button class="btn btn-danger-ghost btn-sm" data-del-onb-res="${r.id}">Delete</button>
+          </div>`).join("") || ui.empty("Nothing uploaded yet — add a contract, document, or template for staff or client onboarding."));
+
+      const newBtn = el.querySelector("#newOnbResource");
+      if (newBtn) newBtn.addEventListener("click", () => ui.formModal("Upload onboarding file", [
+        { name: "file", label: "File", type: "file", required: true, span2: true },
+        { name: "name", label: "File name", required: true, span2: true },
+        { name: "category", label: "Type", type: "select", options: [["contract", "Contract"], ["document", "Document"], ["template", "Template"]] },
+        { name: "audience", label: "Who is this for", type: "select", options: [["both", "Staff & client"], ["staff", "Staff only"], ["client", "Client only"]] },
+      ], async (v, close) => {
+        const file = v.file;
+        if (!file || !file.size) throw new Error("Choose a file to upload.");
+        const id = S.uid();
+        const { path, size } = await OM.db.uploadAttachment("onboarding_resources", id, file);
+        S.create("onboardingResource", { id, name: v.name, category: v.category || "document", audience: v.audience || "both", storagePath: path, sizeBytes: size, uploadedBy: S.meId, uploadedAt: Date.now() }, "Uploaded onboarding library file — " + v.name);
+        close(); ui.toast("File uploaded.", "good"); draw();
+      }));
+      el.querySelectorAll("[data-dl-onb-res]").forEach((b) => b.addEventListener("click", () => {
+        const r = S.find("onboardingResource", b.dataset.dlOnbRes);
+        OM.actions.downloadAttachment(r.storagePath, r.name);
+      }));
+      el.querySelectorAll("[data-del-onb-res]").forEach((b) => b.addEventListener("click", () => {
+        const r = S.find("onboardingResource", b.dataset.delOnbRes);
+        ui.confirmModal("Delete file", `Delete "<b>${esc(r.name)}</b>"? This is recorded in the audit log.`, (reason) => {
+          S.remove("onboardingResource", r.id, reason);
+          ui.toast("File deleted.", "good");
+          draw();
+        }, { danger: true, reason: true, okLabel: "Delete" });
+      }));
+    }
+    draw();
+  };
 })();
