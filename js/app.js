@@ -34,6 +34,9 @@
         { hash: "#/exec/board", icon: ic("shield"), label: "Board room", match: /^#\/exec\/board/ },
         { hash: "#/exec/risk", icon: ic("alert"), label: "Risk & legal", match: /^#\/exec\/risk/ },
         { hash: "#/exec/audit", icon: ic("ledger"), label: "Audit center", match: /^#\/exec\/audit/ },
+        // Deciding approvals is exec-only (0015) — no other department has
+        // a reason to see this, so it lives here instead of a shared bucket.
+        { hash: "#/approvals", icon: ic("checkCircle"), label: "Approvals", match: /^#\/approvals/, count: () => M.approvalsPending().length },
       ],
     });
     if (has("sales")) sections.push({
@@ -46,14 +49,27 @@
         { hash: "#/sales/commissions", icon: ic("dollar"), label: "Commissions", match: /^#\/sales\/commissions/ },
       ],
     });
-    const company = { label: "Company", items: [] };
-    if (has("clients")) company.items.push({ hash: "#/clients", icon: ic("building"), label: "Clients", match: /^#\/client/ });
-    if (has("comms")) company.items.push({ hash: "#/comms", icon: ic("mail"), label: "Communications", match: /^#\/comms/ });
-    if (has("finance")) company.items.push({ hash: "#/finance", icon: ic("dollar"), label: "Finance", match: /^#\/finance/ });
-    if (has("hr")) company.items.push({ hash: "#/hr", icon: ic("users"), label: "People (HR)", match: /^#\/hr/ });
-    if (has("equipment")) company.items.push({ hash: "#/equipment", icon: ic("wrench"), label: "Equipment", match: /^#\/equipment/ });
-    if (has("approvals")) company.items.push({ hash: "#/approvals", icon: ic("checkCircle"), label: "Approvals", match: /^#\/approvals/, count: () => M.approvalsPending().filter((a) => S.can("approve", "approval", a)).length });
-    sections.push(company);
+    // Client-facing work (Sales, Production, Creative account leads, and any
+    // dept_head) — kept as its own section rather than folded into any one
+    // department's, since more than one department legitimately needs it.
+    const clientWork = { label: "Clients", items: [] };
+    if (has("clients")) clientWork.items.push({ hash: "#/clients", icon: ic("building"), label: "Clients", match: /^#\/client/ });
+    if (has("comms")) clientWork.items.push({ hash: "#/comms", icon: ic("mail"), label: "Communications", match: /^#\/comms/ });
+    if (clientWork.items.length) sections.push(clientWork);
+    // Production / Creative / Technology — the one module unique to the
+    // hands-on departments (Sales/Finance/HR have no reason to see it).
+    if (has("equipment")) sections.push({
+      label: "Equipment",
+      items: [{ hash: "#/equipment", icon: ic("wrench"), label: "Equipment room", match: /^#\/equipment/ }],
+    });
+    if (has("finance")) sections.push({
+      label: "Finance",
+      items: [{ hash: "#/finance", icon: ic("dollar"), label: "Finance", match: /^#\/finance/ }],
+    });
+    if (has("hr")) sections.push({
+      label: "Human Resources",
+      items: [{ hash: "#/hr", icon: ic("users"), label: "People (HR)", match: /^#\/hr/ }],
+    });
     sections.push({
       label: "Library",
       items: [

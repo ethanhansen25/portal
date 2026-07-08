@@ -177,9 +177,11 @@
     ], (v, close) => {
       const e = S.create("expense", { vendor: v.vendor, amount: +v.amount, category: v.category, projectId: v.projectId || null, memo: v.memo, date: Date.now(), submittedBy: S.meId, status: "pending" }, "Submitted expense — " + v.vendor + " " + U.money(+v.amount));
       const me = S.me();
-      const bigTicket = +v.amount > 2500;
-      S.create("approval", { type: "expense", title: "Expense — " + v.vendor + " " + U.money(+v.amount), refType: "expense", refId: e.id, requestedBy: S.meId, requestedAt: Date.now(), amount: +v.amount, status: "pending", priority: +v.amount > 2000 ? "high" : "medium", approverRoles: [bigTicket ? "exec" : "dept_head:" + me.dept], description: v.memo });
-      S.notify((bigTicket ? S.execIds() : [S.deptHeadId(me.dept)]).filter(Boolean), "approval", "Approval needed: " + v.vendor + " " + U.money(+v.amount), "Submitted by " + me.name, "#/approvals");
+      // All approvals are decided by executives only (see decide_approval(),
+      // 0015) — dept heads are no longer approvers, so every expense routes
+      // to exec regardless of size.
+      S.create("approval", { type: "expense", title: "Expense — " + v.vendor + " " + U.money(+v.amount), refType: "expense", refId: e.id, requestedBy: S.meId, requestedAt: Date.now(), amount: +v.amount, status: "pending", priority: +v.amount > 2000 ? "high" : "medium", approverRoles: ["exec"], description: v.memo });
+      S.notify(S.execIds(), "approval", "Approval needed: " + v.vendor + " " + U.money(+v.amount), "Submitted by " + me.name, "#/approvals");
       close(); ui.toast("Expense submitted for approval.", "good"); OM.router.refresh();
     });
   };
@@ -565,6 +567,7 @@
 
   /* ================= EQUIPMENT ================= */
   OM.pages.equipment = function (el) {
+    if (!S.moduleAccess("equipment")) { el.innerHTML = ui.empty("Equipment is restricted to Production, Creative, Technology, department heads, and executives.", "🔒"); return; }
     const cats = ["All", ...new Set(S.db.equipment.map((e) => e.category))];
     let activeCat = "All";
     const me = S.me();
@@ -903,8 +906,9 @@
     ], (v, close) => {
       const start = Date.now() + (+v.startDays) * U.DAY;
       const t = S.create("timeoff", { userId: S.meId, type: v.type, start, end: start + (+v.days - 1) * U.DAY, days: +v.days, status: "pending", reason: v.reason || "" }, "Requested time off — " + v.days + "d " + v.type);
-      S.create("approval", { type: "timeoff", title: "Time off — " + me.name + ", " + v.days + " day" + (v.days > 1 ? "s" : ""), refType: "timeoff", refId: t.id, requestedBy: S.meId, requestedAt: Date.now(), status: "pending", priority: "low", approverRoles: ["dept_head:" + me.dept], description: v.type + " starting " + U.date(start) });
-      S.notify([S.deptHeadId(me.dept)].filter(Boolean), "hr", "Time off request: " + me.name, v.days + "d " + v.type, "#/approvals");
+      // Executives only decide approvals now (see decide_approval(), 0015).
+      S.create("approval", { type: "timeoff", title: "Time off — " + me.name + ", " + v.days + " day" + (v.days > 1 ? "s" : ""), refType: "timeoff", refId: t.id, requestedBy: S.meId, requestedAt: Date.now(), status: "pending", priority: "low", approverRoles: ["exec"], description: v.type + " starting " + U.date(start) });
+      S.notify(S.execIds(), "hr", "Time off request: " + me.name, v.days + "d " + v.type, "#/approvals");
       close(); ui.toast("Request submitted for approval.", "good"); OM.router.refresh();
     }));
     el.querySelector("#signOutSettings").addEventListener("click", async () => { await S.signOut(); location.hash = "#/"; OM.renderLogin(); });

@@ -206,11 +206,19 @@
           if (role === "intern" || role === "contractor") return false;
           return exec || dept === "Human Resources";
         case "equipment":
-          return role !== "intern" ? true : true; // interns may view equipment (read-only)
+          // Relevant to the departments that actually use physical gear —
+          // Sales/Finance/HR/Administration have no reason to see this menu.
+          return exec || role === "dept_head" || ["Production", "Creative", "Technology"].includes(dept);
         case "resources": case "documents":
           return true;
         case "approvals":
-          return exec || role === "dept_head";
+          // Executives only decide approvals now (matches decide_approval()
+          // and the approvals_select RLS policy in 0015) — a requester can
+          // still reach the Approval Center to check their OWN submission
+          // (see OM.pages.approvals' separate requestedBy bypass), but the
+          // nav item and the general approve/view-others capability are
+          // exec-exclusive.
+          return exec;
         default:
           return exec;
       }
@@ -342,12 +350,11 @@
           return false;
         }
         case "approval": {
-          if (action === "view") return role === "dept_head" || (rec && own(rec, "requestedBy"));
-          if (action === "approve") {
-            if (role !== "dept_head") return false;
-            if (!rec) return true;
-            return (rec.approverRoles || []).some((r) => r === "dept_head:" + dept || (r === "hr" && dept === "Human Resources"));
-          }
+          // Deciding approvals is exec-only now (exec bypass above covers
+          // it) — a dept_head is no longer an approver, but everyone can
+          // still view/create their own submitted request.
+          if (action === "view") return rec && own(rec, "requestedBy");
+          if (action === "approve") return false;
           if (action === "create") return true;
           return false;
         }
