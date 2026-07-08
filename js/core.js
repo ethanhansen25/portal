@@ -270,10 +270,11 @@
           return false;
         }
         case "task": {
+          const isAssignee = (r) => r && (own(r, "assigneeId") || (r.assigneeIds || []).includes(u.id));
           if (role === "contractor" || role === "intern") {
             if (action === "delete") return false;
             if (!rec) return action === "view";
-            return own(rec, "assigneeId") || inMyProjects(rec.projectId);
+            return isAssignee(rec) || inMyProjects(rec.projectId);
           }
           if (action === "delete") return level >= 60 || (rec && own(rec, "createdBy"));
           if (action === "assign") return level >= 50;
@@ -322,7 +323,7 @@
             if (role === "contractor") return rec && (rec.status !== "checked_out" ? true : rec.assignedTo === u.id);
             return true;
           }
-          if (action === "edit" || action === "manage") return dept === "Technology" || role === "dept_head";
+          if (action === "create" || action === "edit" || action === "manage") return dept === "Technology" || role === "dept_head";
           if (action === "delete") return dept === "Technology" && role === "dept_head";
           return false;
         }
@@ -357,8 +358,18 @@
         }
         case "initiative": case "risk": case "boardNote":
           return false; // exec only
-        case "hrNote": case "onboardingTemplate": case "onboardingAssignment":
+        case "hrNote":
           return dept === "Human Resources";
+        case "onboardingTemplate": case "onboardingAssignment":
+          // Sales manages client onboarding; HR keeps managing staff
+          // onboarding — matches onboarding_templates_write/onboarding_
+          // assignments_write (0013), which grant both departments equally.
+          return dept === "Human Resources" || dept === "Sales";
+        case "onboardingFile": {
+          if (dept === "Human Resources" || dept === "Sales" || role === "dept_head") return true;
+          const a = rec && S.find("onboardingAssignment", rec.assignmentId);
+          return !!(a && a.profileId === u.id);
+        }
         case "deliverable": {
           if (action === "view") return !rec || role === "dept_head" || inMyProjects(rec.projectId);
           if (action === "create") return role === "dept_head" || ["Production", "Creative"].includes(dept);
@@ -476,6 +487,8 @@
         await OM.db.from("key_results").insert(data.keyResults.map((k) => ({ initiative_id: data.id, text: k.text, done: k.done || 0, target: k.target || 1 })));
       } else if (entity === "onboardingTemplate" && (data.tasks || []).length) {
         await OM.db.from("onboarding_template_tasks").insert(data.tasks.map((t, i) => ({ template_id: data.id, text: t.text, category: t.category || "general", position: i })));
+      } else if (entity === "task" && (data.assigneeIds || []).length) {
+        await OM.db.from("task_assignees").insert(data.assigneeIds.map((uid) => ({ task_id: data.id, user_id: uid })));
       }
     },
 
@@ -550,6 +563,38 @@
       S.audit("assign", "project", projectId, "Added " + S.userName(userId) + " to " + p.code);
       S.notify(userId, "project", "You were added to " + p.name, "Added by " + S.userName(S.meId), "#/project/" + projectId);
       S._bg(OM.db.from("project_team").insert({ project_id: projectId, user_id: userId }), "Add team member", ["projects"]);
+    },
+    // Replaces a task's full assignee list (used by the multi-assignee task
+    // form). Notifies anyone newly added; doesn't touch assignee_id, which
+    // stays "whoever was added first" for the kanban avatar / legacy filters.
+    setTaskAssignees(taskId, userIds) {
+      const t = S.find("task", taskId); if (!t) return;
+      S.assertCan("edit", "task", t);
+      const prev = new Set(t.assigneeIds || []);
+      const next = Array.from(new Set(userIds || []));
+      t.assigneeIds = next;
+      if (!t.assigneeId && next.length) t.assigneeId = next[0];
+      const added = next.filter((id) => !prev.has(id));
+      added.forEach((uid) => { if (uid !== S.meId) S.notify(uid, "task", "Assigned: " + t.title, "By " + S.userName(S.meId), "#/task/" + taskId); });
+      S.audit("assign", "task", taskId, "Set assignees on \"" + t.title + "\" — " + next.map((id) => S.userName(id)).join(", "));
+      S._bg((async () => {
+        await OM.db.from("task_assignees").delete().eq("task_id", taskId);
+        if (next.length) await OM.db.from("task_assignees").insert(next.map((uid) => ({ task_id: taskId, user_id: uid })));
+      })(), "Set task assignees", ["tasks"]);
+    },
+    setMeetingAttendees(meetingId, userIds) {
+      const m = S.find("meeting", meetingId); if (!m) return;
+      S.assertCan("edit", "meeting", m);
+      const prev = new Set(Array.isArray(m.attendees) ? m.attendees : []);
+      const next = Array.from(new Set(userIds || []));
+      m.attendees = next;
+      const added = next.filter((id) => !prev.has(id));
+      added.forEach((uid) => { if (uid !== S.meId) S.notify(uid, "meeting", "Invited: " + m.title, U.dateTime(m.ts), "#/calendar"); });
+      S.audit("assign", "meeting", meetingId, "Set attendees on \"" + m.title + "\"");
+      S._bg((async () => {
+        await OM.db.from("meeting_attendees").delete().eq("meeting_id", meetingId);
+        if (next.length) await OM.db.from("meeting_attendees").insert(next.map((uid) => ({ meeting_id: meetingId, user_id: uid })));
+      })(), "Set meeting attendees", ["meetings"]);
     },
 
     /* ---------- DOMAIN ACTIONS ---------- */
@@ -646,6 +691,20 @@
       S.assertCan("edit", "onboardingAssignment", null);
       return OM.db.rpc("approve_onboarding", { p_assignment_id: assignmentId })
         .then(() => S.resync("onboardingAssignments", "notifications"));
+    },
+    // Attaches a checklist to someone who's already active (client or staff)
+    // — approve_user() only seeds onboarding at the moment of initial
+    // approval, so anything assigned later goes through this RPC instead.
+    assignOnboarding(profileId, templateId) {
+      S.assertCan("create", "onboardingAssignment", null);
+      return OM.db.rpc("assign_onboarding", { p_profile_id: profileId, p_template_id: templateId })
+        .then(() => S.resync("onboardingAssignments", "notifications"));
+    },
+    uploadOnboardingFile(assignmentId, file) {
+      return (async () => {
+        const { path } = await OM.db.uploadAttachment("onboarding", assignmentId, file);
+        S.create("onboardingFile", { assignmentId, name: file.name, storagePath: path, uploadedBy: S.meId }, "Uploaded onboarding file — " + file.name);
+      })();
     },
 
     // ---------- contracts ----------

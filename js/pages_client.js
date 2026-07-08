@@ -17,17 +17,17 @@
 
   /* ================= SHELL ================= */
   const NAV = [
-    { hash: "#/c/", icon: "◆", label: "Dashboard", match: /^#\/c\/?$/ },
-    { hash: "#/c/projects", icon: "▣", label: "Projects", match: /^#\/c\/project/ },
-    { hash: "#/c/deliverables", icon: "▤", label: "Deliverables", match: /^#\/c\/deliverables/ },
-    { hash: "#/c/approvals", icon: "✓", label: "Approvals", match: /^#\/c\/approvals/ },
-    { hash: "#/c/contracts", icon: "✎", label: "Contracts", match: /^#\/c\/contract/ },
-    { hash: "#/c/proposals", icon: "◈", label: "Proposals", match: /^#\/c\/proposal/ },
-    { hash: "#/c/invoices", icon: "$", label: "Invoices", match: /^#\/c\/invoices/ },
-    { hash: "#/c/files", icon: "▦", label: "Files", match: /^#\/c\/files/ },
-    { hash: "#/c/messages", icon: "✉", label: "Messages", match: /^#\/c\/messages/ },
-    { hash: "#/c/meetings", icon: "◫", label: "Meetings", match: /^#\/c\/meetings/ },
-    { hash: "#/c/support", icon: "☺", label: "Support", match: /^#\/c\/support/ },
+    { hash: "#/c/", icon: OM.icon("home"), label: "Dashboard", match: /^#\/c\/?$/ },
+    { hash: "#/c/projects", icon: OM.icon("layers"), label: "Projects", match: /^#\/c\/project/ },
+    { hash: "#/c/deliverables", icon: OM.icon("package"), label: "Deliverables", match: /^#\/c\/deliverables/ },
+    { hash: "#/c/approvals", icon: OM.icon("checkCircle"), label: "Approvals", match: /^#\/c\/approvals/ },
+    { hash: "#/c/contracts", icon: OM.icon("signature"), label: "Contracts", match: /^#\/c\/contract/ },
+    { hash: "#/c/proposals", icon: OM.icon("diamond"), label: "Proposals", match: /^#\/c\/proposal/ },
+    { hash: "#/c/invoices", icon: OM.icon("dollar"), label: "Invoices", match: /^#\/c\/invoices/ },
+    { hash: "#/c/files", icon: OM.icon("folder"), label: "Files", match: /^#\/c\/files/ },
+    { hash: "#/c/messages", icon: OM.icon("chat"), label: "Messages", match: /^#\/c\/messages/ },
+    { hash: "#/c/meetings", icon: OM.icon("clock"), label: "Meetings", match: /^#\/c\/meetings/ },
+    { hash: "#/c/support", icon: OM.icon("lifeBuoy"), label: "Support", match: /^#\/c\/support/ },
   ];
 
   CP.renderShell = function () {
@@ -46,10 +46,10 @@
         </aside>
         <div class="main-col">
           <header class="topbar">
-            <button class="icon-btn burger" id="burger">☰</button>
+            <button class="icon-btn burger" id="burger">${OM.icon("menu")}</button>
             <div class="flex-spacer"></div>
-            <button class="icon-btn" id="themeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? "☀" : "☾"}</button>
-            <button class="icon-btn bell" id="bellBtn" title="Notifications">◉<span class="bell-count" id="bellCount"></span></button>
+            <button class="icon-btn" id="themeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? OM.icon("sun") : OM.icon("moon")}</button>
+            <button class="icon-btn bell" id="bellBtn" title="Notifications">${OM.icon("bell")}<span class="bell-count" id="bellCount"></span></button>
             <div class="user-menu-wrap">
               <button class="icon-btn" id="userBtn">${ui.avatar(u)}</button>
               <div class="user-menu" id="userMenu">
@@ -65,7 +65,7 @@
     renderNav();
     document.getElementById("burger").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
     document.getElementById("bellBtn").addEventListener("click", () => (location.hash = "#/c/notifications"));
-    document.getElementById("themeBtn").addEventListener("click", (e) => { OM.theme.toggle(); e.currentTarget.textContent = OM.theme.get() === "dark" ? "☀" : "☾"; });
+    document.getElementById("themeBtn").addEventListener("click", (e) => { OM.theme.toggle(); e.currentTarget.innerHTML = OM.theme.get() === "dark" ? OM.icon("sun") : OM.icon("moon"); });
     const userBtn = document.getElementById("userBtn"), menu = document.getElementById("userMenu");
     userBtn.addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("open"); });
     document.addEventListener("click", () => menu.classList.remove("open"));
@@ -125,8 +125,44 @@
   CP.pages = {};
 
   /* ================= DASHBOARD ================= */
+  // Shown on the client dashboard only while onboarding is incomplete or
+  // awaiting HR/Sales final sign-off — disappears entirely the moment
+  // approvedAt is set, per "add onboarding to clients, but remove after
+  // completed."
+  function clientOnboardingCard(a) {
+    const tasks = (a.tasks || []).slice().sort((x, y) => x.position - y.position);
+    const done = tasks.filter((t) => t.done).length;
+    const files = a.files || [];
+    return ui.sectionCard("Getting you set up", `
+      <div class="onboard-progress"><span class="muted">${done} of ${tasks.length} complete</span>${ch.meter(tasks.length ? Math.round((done / tasks.length) * 100) : 0)}</div>
+      ${tasks.map((t) => `<label class="list-row onboard-item"><input type="checkbox" data-onb-task="${t.id}" ${t.done ? "checked" : ""}>
+        <span class="list-main"><b>${esc(t.text)}</b></span></label>`).join("")}
+      <h4 class="modal-sub">Files</h4>
+      ${files.map((f) => `<div class="list-row"><span class="file-icon">FILE</span><span class="list-main"><b>${esc(f.name)}</b></span><button class="btn btn-ghost btn-sm" data-onb-file="${f.id}">⤓</button></div>`).join("") || '<p class="muted">No files yet.</p>'}
+      <div class="row-gap"><input type="file" id="onbFileInput" hidden><button class="btn btn-ghost btn-sm" id="onbFileBtn">+ Upload a file</button></div>
+      ${done === tasks.length && tasks.length ? `<div class="inline-note">All done — waiting on final sign-off.</div>` : ""}
+    `);
+  }
+  function bindClientOnboardingCard(el, assignmentId) {
+    el.querySelectorAll("[data-onb-task]").forEach((cb) => cb.addEventListener("change", () => {
+      S.completeOnboardingTask(cb.dataset.onbTask, cb.checked).then(() => CP.router.refresh()).catch((e) => ui.toast(e.message, "bad"));
+    }));
+    el.querySelectorAll("[data-onb-file]").forEach((b) => b.addEventListener("click", () => {
+      const f = S.find("onboardingFile", b.dataset.onbFile);
+      OM.actions.openAttachment(f.storagePath);
+    }));
+    const fileBtn = el.querySelector("#onbFileBtn"), fileInput = el.querySelector("#onbFileInput");
+    if (fileBtn) fileBtn.addEventListener("click", () => fileInput.click());
+    if (fileInput) fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0]; if (!file) return;
+      try { await S.uploadOnboardingFile(assignmentId, file); ui.toast("File uploaded.", "good"); CP.router.refresh(); }
+      catch (e) { ui.toast("Upload failed: " + e.message, "bad"); }
+    });
+  }
+
   CP.pages.dashboard = function (el) {
     const u = me(), client = myClient();
+    const myOnboarding = S.db.onboardingAssignments.find((a) => a.profileId === u.id && !a.approvedAt);
     const projects = myProjects().filter((p) => p.status === "active");
     const deliverables = S.db.deliverables.filter((d) => d.clientId === u.clientId);
     const awaitingApproval = deliverables.filter((d) => d.status === "sent_to_client");
@@ -138,6 +174,7 @@
     const recentFiles = S.db.documents.filter((d) => d.clientId === u.clientId && ["client_visible", "final_delivery"].includes(d.visibility)).sort((a, b) => b.uploadedAt - a.uploadedAt);
 
     el.innerHTML = ui.pageHead(`Welcome, ${esc(u.name.split(" ")[0])}`, esc(client ? client.name : "") + " · " + new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })) +
+      (myOnboarding ? clientOnboardingCard(myOnboarding) : "") +
       ui.kpi([
         { label: "Active projects", value: projects.length, link: "#/c/projects" },
         { label: "Awaiting your approval", value: awaitingApproval.length, tone: awaitingApproval.length ? "warn" : null, link: "#/c/approvals" },
@@ -158,6 +195,7 @@
           ${ui.sectionCard("Recent files", recentFiles.slice(0, 5).map((d) => `<div class="list-row"><span class="file-icon">${d.type.toUpperCase()}</span><span class="list-main"><b>${esc(d.name)}</b><span class="muted">${U.date(d.uploadedAt)}</span></span></div>`).join("") || ui.empty("No files yet."), { action: '<a class="link" href="#/c/files">All files →</a>' })}
         </div>
       </div>`;
+    if (myOnboarding) bindClientOnboardingCard(el, myOnboarding.id);
   };
 
   /* ================= PROJECTS ================= */
@@ -198,13 +236,18 @@
       <b>${esc(d.name)}</b><span class="muted">${U.cap(d.kind)} · ${esc((S.find("project", d.projectId) || {}).name || "")}</span>
       ${d.clientNotes ? `<p class="body-text">"${esc(d.clientNotes)}"</p>` : ""}
       <div class="eq-actions">
-        ${d.storagePath ? `<button class="btn btn-ghost btn-sm" data-open="${d.id}">⤓ View</button>` : ""}
+        ${d.storagePath ? `<button class="btn btn-ghost btn-sm" data-open="${d.id}">⤓ Preview</button>` : ""}
+        ${d.storagePath && d.downloadPermission ? `<button class="btn btn-gold btn-sm" data-download="${d.id}">⬇ Download</button>` : ""}
         ${opts.canReview && d.status === "sent_to_client" ? `<button class="btn btn-gold btn-sm" data-approve="${d.id}">Approve</button><button class="btn btn-ghost btn-sm" data-revise="${d.id}">Request revision</button>` : ""}
       </div>
     </div>`;
   }
   function bindDeliverableActions(el, redraw) {
     el.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => OM.actions.openAttachment(S.find("deliverable", b.dataset.open).storagePath)));
+    el.querySelectorAll("[data-download]").forEach((b) => b.addEventListener("click", () => {
+      const d = S.find("deliverable", b.dataset.download);
+      OM.actions.downloadAttachment(d.storagePath, d.name);
+    }));
     el.querySelectorAll("[data-approve]").forEach((b) => b.addEventListener("click", () => {
       ui.confirmModal("Approve deliverable", "Approve this deliverable as final?", () => {
         S.clientReviewDeliverable(b.dataset.approve, "client_approved", null).then(() => { ui.toast("Approved.", "good"); redraw(); }).catch((e) => ui.toast(e.message, "bad"));

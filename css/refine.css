@@ -112,6 +112,18 @@
 .onboard-item { cursor: pointer; }
 .onboard-item input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--gold); cursor: pointer; }
 
+/* Kanban card assignee stack ------------------------------------------------ */
+.kc-avatars { display: flex; margin-left: auto; }
+.kc-avatars .avatar { margin-left: -6px; border: 2px solid var(--surface); }
+.kc-avatars .avatar:first-child { margin-left: 0; }
+.avatar-more { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: -6px; border-radius: 50%; background: var(--hairline); color: var(--muted); font-size: 9px; font-weight: 600; border: 2px solid var(--surface); }
+
+/* Multi-select checkbox list (e.g. task assignees) -------------------------- */
+.checkbox-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--hairline); border-radius: 10px; padding: 4px 12px; background: var(--surface); }
+.checkbox-list .checkbox-row { display: flex; align-items: center; gap: 9px; padding: 8px 2px; font-size: 13.5px; cursor: pointer; border-bottom: 1px solid var(--hairline); }
+.checkbox-list .checkbox-row:last-child { border-bottom: none; }
+.checkbox-list .checkbox-row input { accent-color: var(--gold); width: 15px; height: 15px; cursor: pointer; flex-shrink: 0; }
+
 @media (max-width: 900px) {
   .auth { grid-template-columns: 1fr; }
   .auth-aside { display: none; }

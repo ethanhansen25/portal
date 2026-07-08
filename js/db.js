@@ -35,7 +35,7 @@
     },
     onboardingTemplate: {
       table: "onboarding_templates", coll: "onboardingTemplates",
-      cols: { id: "id", dept: "dept", name: "name", created_by: "createdBy", created_at: "createdAt" },
+      cols: { id: "id", dept: "dept", name: "name", audience: "audience", created_by: "createdBy", created_at: "createdAt" },
       embeds: { onboarding_template_tasks: { as: "tasks", select: "*", map: (r) => ({ id: r.id, text: r.text, category: r.category, position: r.position }) } },
     },
     onboardingTemplateTask: {
@@ -45,7 +45,14 @@
     onboardingAssignment: {
       table: "onboarding_assignments", coll: "onboardingAssignments",
       cols: { id: "id", profile_id: "profileId", template_id: "templateId", assigned_by: "assignedBy", assigned_at: "assignedAt", approved_by: "approvedBy", approved_at: "approvedAt" },
-      embeds: { onboarding_task_progress: { as: "tasks", select: "*", map: (r) => ({ id: r.id, templateTaskId: r.template_task_id, text: r.text, category: r.category, position: r.position, done: r.done, doneAt: parseTs(r.done_at), doneBy: r.done_by }) } },
+      embeds: {
+        onboarding_task_progress: { as: "tasks", select: "*", map: (r) => ({ id: r.id, templateTaskId: r.template_task_id, text: r.text, category: r.category, position: r.position, done: r.done, doneAt: parseTs(r.done_at), doneBy: r.done_by }) },
+        onboarding_files: { as: "files", select: "*", map: (r) => ({ id: r.id, name: r.name, storagePath: r.storage_path, uploadedBy: r.uploaded_by, uploadedAt: parseTs(r.uploaded_at) }) },
+      },
+    },
+    onboardingFile: {
+      table: "onboarding_files", coll: "onboardingFiles",
+      cols: { id: "id", assignment_id: "assignmentId", name: "name", storage_path: "storagePath", uploaded_by: "uploadedBy", uploaded_at: "uploadedAt" },
     },
     deliverable: {
       table: "deliverables", coll: "deliverables",
@@ -101,6 +108,7 @@
         task_comments: { as: "comments", select: "*", map: (r) => ({ id: r.id, userId: r.user_id, text: r.body, ts: parseTs(r.created_at) }) },
         task_time_entries: { as: "timeEntries", select: "*", map: (r) => ({ id: r.id, userId: r.user_id, hours: Number(r.hours), date: parseTs(r.entry_date) }) },
         task_dependencies: { as: "dependsOn", select: "depends_on_id", map: (r) => r.depends_on_id, scalarList: true },
+        task_assignees: { as: "assigneeIds", select: "user_id", map: (r) => r.user_id, scalarList: true },
       },
     },
     invoice: {
@@ -326,13 +334,23 @@
     /* ---------- STORAGE ----------
        avatars: public bucket, path {userId}/{filename} — RLS restricts write
        to the user's own folder (supabase/migrations/0004_storage.sql).
-       attachments: private bucket, path {resources|documents}/{recordId}/
-       {filename} — RLS re-checks the same visibility as the owning table row. */
+       attachments: private bucket, path {resources|documents|deliverables|
+       onboarding}/{recordId}/{filename} — RLS re-checks the same visibility
+       as the owning table row. If either bucket is missing (a fresh project
+       that skipped 0004, or a partial migration run), Supabase returns a
+       bare "Bucket not found" — surfaced here with a pointer to the fix
+       instead of leaving that cryptic on its own. */
+    friendlyStorageError(error) {
+      if (error && /bucket not found/i.test(error.message || "")) {
+        return new Error("Storage bucket not found — run supabase/migrations/0011_ensure_storage_buckets.sql in the Supabase SQL editor, then try again.");
+      }
+      return error;
+    },
     async uploadAvatar(userId, file) {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
       const path = `${userId}/avatar-${Date.now()}.${ext}`;
       const { error } = await DB.client.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
-      if (error) throw error;
+      if (error) throw DB.friendlyStorageError(error);
       const { data } = DB.client.storage.from("avatars").getPublicUrl(path);
       return data.publicUrl;
     },
@@ -340,17 +358,17 @@
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const path = `${kind}/${recordId}/${Date.now()}-${safeName}`;
       const { error } = await DB.client.storage.from("attachments").upload(path, file, { contentType: file.type });
-      if (error) throw error;
+      if (error) throw DB.friendlyStorageError(error);
       return { path, size: file.size, type: file.type, name: file.name };
     },
     async attachmentSignedUrl(path, seconds = 300) {
       const { data, error } = await DB.client.storage.from("attachments").createSignedUrl(path, seconds);
-      if (error) throw error;
+      if (error) throw DB.friendlyStorageError(error);
       return data.signedUrl;
     },
     async deleteAttachment(path) {
       const { error } = await DB.client.storage.from("attachments").remove([path]);
-      if (error) throw error;
+      if (error) throw DB.friendlyStorageError(error);
     },
   });
 })();

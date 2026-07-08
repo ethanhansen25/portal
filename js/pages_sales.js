@@ -153,7 +153,8 @@
     el.innerHTML = ui.pageHead(esc(l.company),
       `${esc(l.contactName)} — ${esc(l.contactTitle || "")} · ${esc(l.phone)} · ${esc(l.email)} · source: ${esc(l.source)}`,
       `${ui.badge(l.stage, STAGES.find((s2) => s2[0] === l.stage)[1])}
-       ${canEdit ? `<button class="btn btn-gold" id="callNow">☎ Log a call</button>` : ""}`) +
+       ${canEdit ? `<button class="btn btn-gold" id="callNow">☎ Log a call</button>` : ""}
+       ${S.can("delete", "lead", l) ? `<button class="btn btn-danger-ghost" id="delLead">Delete</button>` : ""}`) +
       `<div class="stage-track">${OPEN_STAGES.map((s2, i) => `<div class="stage-step ${i <= stageIdx ? "hit" : ""} ${l.stage === "won" ? "won-all" : ""} ${l.stage === "lost" ? "lost-all" : ""}">${STAGES.find((x) => x[0] === s2)[1]}</div>`).join("")}</div>
       <div class="grid-2">
         <div>
@@ -178,6 +179,12 @@
     if (sv) sv.addEventListener("click", () => { S.update("lead", l.id, { notes: el.querySelector("#leadNotes").value }, "Updated notes — " + l.company); ui.toast("Saved.", "good"); });
     const callBtn = el.querySelector("#callNow");
     if (callBtn) callBtn.addEventListener("click", () => logCallModal(l));
+    const delBtn = el.querySelector("#delLead");
+    if (delBtn) delBtn.addEventListener("click", () => ui.confirmModal("Delete lead", `Delete "<b>${esc(l.company)}</b>"? This is recorded in the audit log.`, (reason) => {
+      S.remove("lead", l.id, reason);
+      ui.toast("Lead deleted.", "good");
+      location.hash = "#/sales/leads";
+    }, { danger: true, reason: true, okLabel: "Delete" }));
     const conv = el.querySelector("#convertBtn");
     if (conv) conv.addEventListener("click", () => ui.formModal("Convert " + l.company + " to client", [
       { name: "projectName", label: "First project name", required: true, value: l.company + " — Kickoff Engagement", span2: true },

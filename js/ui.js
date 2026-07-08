@@ -240,6 +240,10 @@
             ? [["", "— Unassigned —"]].concat(OM.store.db.users.filter((u) => u.status === "active" && (!f.filter || f.filter(u))).map((u) => [u.id, u.name + " · " + u.title]))
             : f.options.map((o) => Array.isArray(o) ? o : [o, U.cap(o)]);
           input = dropdownHtml(f.name, opts, f.value, { placeholder: f.placeholder, required: f.required });
+        } else if (f.type === "userMulti") {
+          const users = OM.store.db.users.filter((u) => u.status === "active" && (!f.filter || f.filter(u)));
+          const checked = new Set(f.value || []);
+          input = `<div class="checkbox-list">${users.map((u) => `<label class="checkbox-row"><input type="checkbox" name="${f.name}" value="${u.id}" ${checked.has(u.id) ? "checked" : ""}><span>${esc(u.name)} <span class="muted">${esc(u.title || u.dept || "")}</span></span></label>`).join("") || '<p class="muted">No one available.</p>'}</div>`;
         } else if (f.type === "readonly") input = `<div class="form-readonly">${esc(f.value || "—")}</div>`;
         else if (f.type === "file") input = `<input type="file" name="${f.name}" ${req} ${f.accept ? `accept="${esc(f.accept)}"` : ""} class="file-input">`;
         else input = `<input type="${f.type || "text"}" name="${f.name}" ${req} value="${esc(f.value != null ? f.value : "")}" placeholder="${esc(f.placeholder || "")}" ${f.step ? `step="${f.step}"` : ""}>`;
@@ -254,15 +258,21 @@
       <div class="form-actions"><button type="submit" class="btn btn-gold">${esc(submitLabel)}</button></div>
     </form>`;
   }
+  // A key seen more than once (e.g. a checkbox group sharing one `name`)
+  // collects into an array; every other field stays a plain scalar.
   function formValues(formEl) {
     const out = {};
-    new FormData(formEl).forEach((v, k) => (out[k] = v));
+    new FormData(formEl).forEach((v, k) => {
+      if (k in out) { if (Array.isArray(out[k])) out[k].push(v); else out[k] = [out[k], v]; }
+      else out[k] = v;
+    });
     return out;
   }
   // Convenience: modal + form + submit handler
   function formModal(title, fields, onSubmit, opts = {}) {
     return modal(title, form(fields, opts.submitLabel || "Save"), {
       wide: opts.wide,
+      footer: opts.footer,
       onMount(wrap, close) {
         initDropdowns(wrap);
         const formEl = wrap.querySelector("form");

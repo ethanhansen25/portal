@@ -9,7 +9,7 @@
   /* ================= HOME (role-aware) ================= */
   OM.pages.home = function (el) {
     const me = S.me();
-    const myTasks = S.db.tasks.filter((t) => t.assigneeId === me.id && t.status !== "done").sort((a, b) => (a.dueDate || 9e15) - (b.dueDate || 9e15));
+    const myTasks = S.db.tasks.filter((t) => isMyTask(t, me) && t.status !== "done").sort((a, b) => (a.dueDate || 9e15) - (b.dueDate || 9e15));
     const myProjects = S.myProjects().filter((p) => p.status === "active");
     const myMeetings = M.meetingsUpcoming().filter((m) => m.attendees === "all" || (m.attendees || []).includes(me.id)).slice(0, 5);
     const unread = S.unreadCount();
@@ -241,7 +241,7 @@
         const u = S.user(uid);
         if (!u) return "";
         const uh = pTasks.reduce((s, t) => s + (t.timeEntries || []).filter((te) => te.userId === uid).reduce((a, te) => a + te.hours, 0), 0);
-        const open = pTasks.filter((t) => t.assigneeId === uid && t.status !== "done").length;
+        const open = pTasks.filter((t) => (t.assigneeId === uid || (t.assigneeIds || []).includes(uid)) && t.status !== "done").length;
         return `<div class="list-row">${ui.avatar(u)}<span class="list-main"><b>${esc(u.name)}${uid === p.leadId ? ' <span class="badge tone-info">Lead</span>' : ""}</b><span class="muted">${esc(u.title)} · ${esc(u.dept)}</span></span><span class="muted">${open} open tasks · ${U.hrs(uh)}</span></div>`;
       }).join("") + "</div>" +
       (canManage ? `<div class="row-gap"><button class="btn btn-ghost" id="addMember">+ Add team member</button></div>` : "");
@@ -361,7 +361,9 @@
         <div><span class="detail-label">Version</span><b>v${d.version}</b></div>
         <div><span class="detail-label">Uploaded by</span><b>${esc(S.userName(d.uploadedBy))}</b></div>
       </div>
-      ${d.storagePath ? `<div class="row-gap"><button class="btn btn-ghost btn-sm" id="dlOpenFile">⤓ Open file</button></div>` : '<p class="muted">No file attached yet.</p>'}
+      ${d.storagePath ? `<div class="row-gap"><button class="btn btn-ghost btn-sm" id="dlOpenFile">⤓ Open file</button>
+        <label class="check-row"><input type="checkbox" id="dlDownloadPerm" ${d.downloadPermission ? "checked" : ""}><span>Allow client to download this file</span></label></div>`
+        : '<p class="muted">No file attached yet.</p>'}
       <h4 class="modal-sub">Client-facing notes</h4>
       <textarea id="dlClientNotes" class="body-text" rows="3" style="width:100%">${esc(d.clientNotes || "")}</textarea>
       <div class="row-gap"><button class="btn btn-ghost btn-sm" id="dlSaveNotes">Save client notes</button></div>
@@ -376,6 +378,11 @@
     });
     const c2 = m.el.querySelector('[data-role="cancel2"]'); if (c2) c2.addEventListener("click", m.close);
     const openBtn = m.el.querySelector("#dlOpenFile"); if (openBtn) openBtn.addEventListener("click", () => OM.actions.openAttachment(d.storagePath));
+    const dlPerm = m.el.querySelector("#dlDownloadPerm");
+    if (dlPerm) dlPerm.addEventListener("change", () => {
+      S.update("deliverable", d.id, { downloadPermission: dlPerm.checked }, (dlPerm.checked ? "Enabled" : "Disabled") + " client download — " + d.name);
+      ui.toast(dlPerm.checked ? "Client can now download this file." : "Client download turned off.", "good");
+    });
     m.el.querySelector("#dlSaveNotes").addEventListener("click", () => {
       const val = m.el.querySelector("#dlClientNotes").value;
       S.update("deliverable", d.id, { clientNotes: val }, "Updated client-facing notes — " + d.name);
@@ -406,18 +413,22 @@
     return [
       { name: "title", label: "Title", value: t.title, required: true, span2: true },
       { name: "projectId", label: "Project", type: "select", options: [["", "— Internal / no project —"]].concat(S.db.projects.filter((p) => p.status !== "archived").map((p) => [p.id, p.code + " · " + p.name])), value: t.projectId || projectId || "" },
-      { name: "assigneeId", label: "Assignee", type: "user", value: t.assigneeId },
+      { name: "assigneeIds", label: "Assign to", type: "userMulti", value: t.assigneeIds || (t.assigneeId ? [t.assigneeId] : []), span2: true, hint: "Check everyone this task belongs to" },
       { name: "priority", label: "Priority", type: "select", options: ["urgent", "high", "medium", "low"], value: t.priority || "medium" },
       { name: "dueDays", label: "Due in (days)", type: "number", value: t.dueDate ? Math.max(0, Math.ceil((t.dueDate - Date.now()) / U.DAY)) : 7 },
       { name: "recurring", label: "Recurring", type: "select", options: [["", "No"], ["weekly", "Weekly"], ["monthly", "Monthly"]], value: t.recurring || "" },
       { name: "desc", label: "Description", type: "textarea", value: t.desc, span2: true },
     ];
   }
+  // FormData yields a single string for a lone checked box, an array for
+  // several, and undefined for none — normalize all three to an array.
+  function assigneeIdsFrom(v) { return v.assigneeIds == null ? [] : Array.isArray(v.assigneeIds) ? v.assigneeIds : [v.assigneeIds]; }
   OM.actions = OM.actions || {};
   OM.actions.newTask = function (projectId) {
     ui.formModal("New task", taskFormFields({}, projectId), (v, close) => {
-      const t = S.create("task", { title: v.title, projectId: v.projectId || null, assigneeId: v.assigneeId || null, priority: v.priority, status: "todo", dueDate: v.dueDays !== "" ? Date.now() + (+v.dueDays) * U.DAY : null, desc: v.desc, createdBy: S.meId, subtasks: [], checklist: [], comments: [], timeEntries: [], dependsOn: [], recurring: v.recurring || null, hours: 0 }, "Created task — " + v.title);
-      if (v.assigneeId && v.assigneeId !== S.meId) S.notify(v.assigneeId, "task", "Assigned: " + v.title, "By " + S.userName(S.meId), "#/task/" + t.id);
+      const assigneeIds = assigneeIdsFrom(v);
+      const t = S.create("task", { title: v.title, projectId: v.projectId || null, assigneeId: assigneeIds[0] || null, assigneeIds, priority: v.priority, status: "todo", dueDate: v.dueDays !== "" ? Date.now() + (+v.dueDays) * U.DAY : null, desc: v.desc, createdBy: S.meId, subtasks: [], checklist: [], comments: [], timeEntries: [], dependsOn: [], recurring: v.recurring || null, hours: 0 }, "Created task — " + v.title);
+      if (assigneeIds.length) S.notify(assigneeIds, "task", "Assigned: " + v.title, "By " + S.userName(S.meId), "#/task/" + t.id);
       close(); ui.toast("Task created.", "good"); OM.router.refresh();
     }, { wide: true });
   };
@@ -450,20 +461,38 @@
       ui.toast("Couldn't open file: " + err.message, "bad");
     }
   };
+  // Forces an actual file download (vs. openAttachment's preview-in-new-tab)
+  // by fetching the signed URL as a blob and clicking a temporary <a download>.
+  OM.actions.downloadAttachment = async function (storagePath, filename) {
+    if (!storagePath) { ui.toast("This record has no file attached.", "bad"); return; }
+    try {
+      const url = await OM.db.attachmentSignedUrl(storagePath);
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl; a.download = filename || storagePath.split("/").pop();
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+    } catch (err) {
+      ui.toast("Couldn't download file: " + err.message, "bad");
+    }
+  };
 
+  function isMyTask(t, me) { return t.assigneeId === me.id || (t.assigneeIds || []).includes(me.id); }
   function visibleTasks() {
     const me = S.me();
     if (S.isExec(me)) return S.db.tasks;
-    if (me.role === "dept_head") return S.db.tasks.filter((t) => { const a = S.user(t.assigneeId); return (a && a.dept === me.dept) || t.assigneeId === me.id || t.createdBy === me.id || S.myProjectIds().has(t.projectId); });
-    if (me.role === "contractor" || me.role === "intern") return S.db.tasks.filter((t) => t.assigneeId === me.id || S.myProjectIds().has(t.projectId));
-    return S.db.tasks.filter((t) => t.assigneeId === me.id || t.createdBy === me.id || S.myProjectIds().has(t.projectId));
+    if (me.role === "dept_head") return S.db.tasks.filter((t) => { const a = S.user(t.assigneeId); return (a && a.dept === me.dept) || isMyTask(t, me) || t.createdBy === me.id || S.myProjectIds().has(t.projectId); });
+    if (me.role === "contractor" || me.role === "intern") return S.db.tasks.filter((t) => isMyTask(t, me) || S.myProjectIds().has(t.projectId));
+    return S.db.tasks.filter((t) => isMyTask(t, me) || t.createdBy === me.id || S.myProjectIds().has(t.projectId));
   }
 
   function renderTaskTable(host, rowsFn, project) {
     host.innerHTML = `<div class="card card-flush" id="tt"></div>`;
     ui.table(host.querySelector("#tt"), {
       rows: rowsFn,
-      searchKeys: ["title", (t) => S.userName(t.assigneeId), (t) => { const p = S.find("project", t.projectId); return p ? p.code + " " + p.name : ""; }],
+      searchKeys: ["title", (t) => (t.assigneeIds && t.assigneeIds.length ? t.assigneeIds : [t.assigneeId]).map((id) => S.userName(id)).join(" "), (t) => { const p = S.find("project", t.projectId); return p ? p.code + " " + p.name : ""; }],
       exportName: "tasks", exportEntity: "task",
       defaultSort: { key: "dueDate", dir: 1 },
       actions: S.can("create", "task") ? `<button class="btn btn-gold btn-sm" onclick="OM.actions.newTask(${project ? `'${project.id}'` : "null"})">+ New task</button>` : "",
@@ -471,7 +500,7 @@
         { key: "priority", label: "", width: "20px", render: (t) => `<span class="prio prio-${t.priority}" title="${U.cap(t.priority)}"></span>`, sortVal: (t) => ({ urgent: 0, high: 1, medium: 2, low: 3 }[t.priority]) },
         { key: "title", label: "Task", render: (t) => `<b>${esc(t.title)}</b>${t.recurring ? ' <span class="badge tone-neutral">↻ ' + t.recurring + "</span>" : ""}${(t.dependsOn || []).length ? ' <span class="muted" title="Has dependencies">⛓</span>' : ""}` },
         { key: "project", label: "Project", render: (t) => { const p = S.find("project", t.projectId); return p ? `<span class="mono">${esc(p.code)}</span>` : '<span class="muted">Internal</span>'; }, sortVal: (t) => { const p = S.find("project", t.projectId); return p ? p.code : "zz"; } },
-        { key: "assigneeId", label: "Assignee", render: (t) => ui.userCell(t.assigneeId), sortVal: (t) => S.userName(t.assigneeId) },
+        { key: "assigneeId", label: "Assigned to", render: (t) => { const ids = t.assigneeIds && t.assigneeIds.length ? t.assigneeIds : [t.assigneeId].filter(Boolean); return ids.length ? ids.map((id) => ui.userCell(id)).join("") : '<span class="muted">Unassigned</span>'; }, sortVal: (t) => S.userName(t.assigneeId) },
         { key: "dueDate", label: "Due", render: (t) => t.dueDate ? (t.dueDate < Date.now() && t.status !== "done" ? `<span class="tone-text-bad">${U.dateShort(t.dueDate)}</span>` : U.dateShort(t.dueDate)) : "—", sortVal: (t) => t.dueDate || 9e15 },
         { key: "status", label: "Status", render: (t) => ui.badge(t.status), sortVal: (t) => t.status },
       ],
@@ -486,7 +515,10 @@
       items,
       colOf: (t) => t.status,
       canMove: (t) => S.can("edit", "task", t),
-      card: (t) => `<div class="kc-title">${esc(t.title)}</div><div class="kc-meta"><span class="prio prio-${t.priority}"></span>${t.dueDate ? `<span class="${t.dueDate < Date.now() && t.status !== "done" ? "tone-text-bad" : "muted"}">${U.dateShort(t.dueDate)}</span>` : ""}${ui.avatar(t.assigneeId)}</div>`,
+      card: (t) => {
+        const assignees = t.assigneeIds && t.assigneeIds.length ? t.assigneeIds : [t.assigneeId].filter(Boolean);
+        return `<div class="kc-title">${esc(t.title)}</div><div class="kc-meta"><span class="prio prio-${t.priority}"></span>${t.dueDate ? `<span class="${t.dueDate < Date.now() && t.status !== "done" ? "tone-text-bad" : "muted"}">${U.dateShort(t.dueDate)}</span>` : ""}<span class="kc-avatars">${assignees.slice(0, 3).map((id) => ui.avatar(id)).join("")}${assignees.length > 3 ? `<span class="avatar-more">+${assignees.length - 3}</span>` : ""}</span></div>`;
+      },
       onMove: (t, col) => {
         const blockers = (t.dependsOn || []).filter((d) => { const dt = S.find("task", d); return dt && dt.status !== "done"; });
         if (col === "done" && blockers.length) { ui.toast("Blocked by " + blockers.length + " unfinished dependenc" + (blockers.length === 1 ? "y" : "ies") + ".", "warn"); return; }
@@ -530,7 +562,7 @@
         <div>
           ${ui.sectionCard("Details", `
             <div class="detail-grid">
-              <div><span class="detail-label">Assignee</span>${ui.userCell(t.assigneeId)}</div>
+              <div><span class="detail-label">Assigned to</span>${(t.assigneeIds && t.assigneeIds.length ? t.assigneeIds : [t.assigneeId].filter(Boolean)).map((id) => ui.userCell(id)).join("") || '<span class="muted">Unassigned</span>'}</div>
               <div><span class="detail-label">Due date</span><b>${t.dueDate ? U.date(t.dueDate) : "—"}</b>${t.dueDate && t.dueDate < Date.now() && t.status !== "done" ? ' <span class="badge tone-bad">Overdue</span>' : ""}</div>
               <div><span class="detail-label">Time logged</span><b>${U.hrs(hours)}</b></div>
               <div><span class="detail-label">Recurring</span><b>${t.recurring ? U.cap(t.recurring) : "No"}</b></div>
@@ -586,9 +618,9 @@
     });
     const editBtn = el.querySelector("#editTask");
     if (editBtn) editBtn.addEventListener("click", () => ui.formModal("Edit task", taskFormFields(t), (v, close) => {
-      const reassigned = v.assigneeId && v.assigneeId !== t.assigneeId;
-      S.update("task", t.id, { title: v.title, projectId: v.projectId || null, assigneeId: v.assigneeId || null, priority: v.priority, dueDate: v.dueDays !== "" ? Date.now() + (+v.dueDays) * U.DAY : null, desc: v.desc, recurring: v.recurring || null }, 'Edited task "' + v.title + '"');
-      if (reassigned) S.notify(v.assigneeId, "task", "Assigned: " + v.title, "By " + S.userName(S.meId), "#/task/" + t.id);
+      const assigneeIds = assigneeIdsFrom(v);
+      S.update("task", t.id, { title: v.title, projectId: v.projectId || null, assigneeId: assigneeIds[0] || null, priority: v.priority, dueDate: v.dueDays !== "" ? Date.now() + (+v.dueDays) * U.DAY : null, desc: v.desc, recurring: v.recurring || null }, 'Edited task "' + v.title + '"');
+      S.setTaskAssignees(t.id, assigneeIds);
       close(); ui.toast("Saved.", "good"); OM.router.refresh();
     }, { wide: true }));
     const delBtn = el.querySelector("#delTask");
@@ -614,11 +646,11 @@
       exportName: "clients", exportEntity: "client",
       columns: [
         { key: "name", label: "Client", render: (c) => `<b>${esc(c.name)}</b><div class="muted">${esc(c.industry)} · ${esc(c.city)}</div>` },
-        { key: "tier", label: "Tier", width: "60px", render: (c) => `<span class="tier tier-${c.tier}">${c.tier}</span>` },
+        { key: "tier", label: "Tier", width: "60px", render: (c) => c.tier ? `<span class="tier tier-${c.tier}">${c.tier}</span>` : "" },
         { key: "ownerId", label: "Account owner", render: (c) => ui.userCell(c.ownerId), sortVal: (c) => S.userName(c.ownerId) },
         { key: "projects", label: "Active projects", render: (c) => String(S.db.projects.filter((p) => p.clientId === c.id && p.status === "active").length), sortVal: (c) => S.db.projects.filter((p) => p.clientId === c.id && p.status === "active").length },
         { key: "ar", label: "Open AR", render: (c) => U.money(S.db.invoices.filter((i) => i.clientId === c.id && ["sent", "overdue", "viewed", "partial"].includes(i.status)).reduce((s, i) => s + i.total, 0), { compact: true }), sortVal: (c) => S.db.invoices.filter((i) => i.clientId === c.id && ["sent", "overdue"].includes(i.status)).reduce((s, i) => s + i.total, 0) },
-        { key: "satisfaction", label: "CSAT", render: (c) => `<b>${c.satisfaction}</b><span class="muted">/10</span>`, sortVal: (c) => c.satisfaction },
+        { key: "satisfaction", label: "CSAT", render: (c) => c.satisfaction != null ? `<b>${c.satisfaction}</b><span class="muted">/10</span>` : '<span class="muted">—</span>', sortVal: (c) => c.satisfaction || 0 },
         { key: "status", label: "Status", render: (c) => ui.badge(c.status) },
       ],
       onRow: (c) => (location.hash = "#/client/" + c.id),
@@ -658,7 +690,9 @@
 
     el.innerHTML = ui.pageHead(esc(c.name),
       `${esc(c.industry)} · ${esc(c.city)} · client since ${U.date(c.since)} · owner ${esc(S.userName(c.ownerId))}`,
-      `${ui.badge(c.status)} <span class="tier tier-${c.tier}">${c.tier}</span>`) +
+      `${ui.badge(c.status)} ${c.tier ? `<span class="tier tier-${c.tier}">${c.tier}</span>` : ""}
+       ${S.can("edit", "client", c) ? `<button class="btn btn-ghost" id="editClient">Edit</button>` : ""}
+       ${S.can("delete", "client", c) ? `<button class="btn btn-danger-ghost" id="delClient">Delete</button>` : ""}`) +
       `<div id="ctabs"></div><div id="cbody" class="tab-body"></div>`;
 
     const tabDefs = [
@@ -679,7 +713,7 @@
         { label: "Revenue YTD", value: showFinance ? U.money(revenueYTD ? revenueYTD.amt : 0, { compact: true }) : "—" },
         { label: "Open AR", value: showFinance ? U.money(openAR, { compact: true }) : "—", tone: cInvoices.some((i) => i.status === "overdue") ? "bad" : null, sub: cInvoices.some((i) => i.status === "overdue") ? "Overdue invoice on account" : "" },
         { label: "Active projects", value: cProjects.filter((p) => p.status === "active").length },
-        { label: "Satisfaction", value: c.satisfaction + "/10", tone: c.satisfaction >= 9 ? "good" : c.satisfaction < 7.5 ? "warn" : null },
+        { label: "Satisfaction", value: c.satisfaction != null ? c.satisfaction + "/10" : "—", tone: c.satisfaction >= 9 ? "good" : c.satisfaction != null && c.satisfaction < 7.5 ? "warn" : null },
       ]) + `<div class="grid-2">
         <div>${ui.sectionCard("Latest communications", cComms.slice(0, 6).map(commRow).join("") || ui.empty("No communications logged."), { action: `<a class="link" href="#/client/${c.id}/comms">All →</a>` })}</div>
         <div>${ui.sectionCard("Open work", cTasks.filter((t) => t.status !== "done").slice(0, 6).map(taskRow).join("") || ui.empty("No open tasks."))}
@@ -737,6 +771,26 @@
         ui.toast("Notes saved.", "good");
       });
     }
+    const delBtn = el.querySelector("#delClient");
+    if (delBtn) delBtn.addEventListener("click", () => ui.confirmModal("Delete client", `Delete "<b>${esc(c.name)}</b>"? This removes their projects, invoices, and files too. This is recorded in the audit log.`, (reason) => {
+      S.remove("client", c.id, reason);
+      ui.toast("Client deleted.", "good");
+      location.hash = "#/clients";
+    }, { danger: true, reason: true, okLabel: "Delete" }));
+    const editBtn = el.querySelector("#editClient");
+    if (editBtn) editBtn.addEventListener("click", () => ui.formModal("Edit " + c.name, [
+      { name: "name", label: "Company name", value: c.name, required: true, span2: true },
+      { name: "industry", label: "Industry", value: c.industry },
+      { name: "city", label: "City", value: c.city },
+      { name: "tier", label: "Tier", type: "select", options: ["A", "B", "C"], value: c.tier },
+      { name: "website", label: "Website", value: c.website },
+      { name: "ownerId", label: "Account owner", type: "user", value: c.ownerId },
+      { name: "status", label: "Status", type: "select", options: [["active", "Active"], ["paused", "Paused"], ["archived", "Archived"]], value: c.status },
+      { name: "satisfaction", label: "Satisfaction (0-10)", type: "number", value: c.satisfaction, step: "0.1" },
+    ], (v, close) => {
+      S.update("client", c.id, { name: v.name, industry: v.industry, city: v.city, tier: v.tier, website: v.website, ownerId: v.ownerId, status: v.status, satisfaction: +v.satisfaction }, "Updated client — " + v.name);
+      close(); ui.toast("Client updated.", "good"); OM.router.refresh();
+    }, { wide: true }));
   };
 
   /* ================= CONTRACTS & PROPOSALS (staff-side) =================
@@ -962,10 +1016,10 @@
     S.db.meetings.forEach((m) => {
       const invited = m.attendees === "all" || (m.attendees || []).includes(me.id) || S.isExec(me);
       if (m.private && !invited) return;
-      if (invited) items.push({ ts: m.ts, kind: "meeting", label: m.title, sub: (m.location || "") + " · " + (m.durationMin || 30) + "m" });
+      if (invited) items.push({ ts: m.ts, kind: "meeting", label: m.title, sub: (m.location || "") + " · " + (m.durationMin || 30) + "m", meetingId: m.id });
     });
     S.db.projects.filter((p) => p.status === "active" && (S.isExec(me) || S.myProjectIds().has(p.id))).forEach((p) => items.push({ ts: p.dueDate, kind: "deadline", label: p.name + " — delivery", sub: p.code, link: "#/project/" + p.id }));
-    S.db.tasks.filter((t) => t.dueDate && t.status !== "done" && (t.assigneeId === me.id || S.isExec(me))).forEach((t) => items.push({ ts: t.dueDate, kind: "task", label: t.title, sub: "Task due", link: "#/task/" + t.id }));
+    S.db.tasks.filter((t) => t.dueDate && t.status !== "done" && (isMyTask(t, me) || S.isExec(me))).forEach((t) => items.push({ ts: t.dueDate, kind: "task", label: t.title, sub: "Task due", link: "#/task/" + t.id }));
     S.db.timeOff.filter((t) => t.status === "approved" && t.start > Date.now() - 7 * U.DAY).forEach((t) => items.push({ ts: t.start, kind: "timeoff", label: S.userName(t.userId) + " — " + t.type, sub: t.days + " day" + (t.days > 1 ? "s" : "") }));
     const payp = M.payrollDue();
     if (payp && (S.isExec(me) || me.dept === "Finance")) items.push({ ts: payp.runDate, kind: "finance", label: "Payroll run", sub: U.money(payp.total) });
@@ -976,16 +1030,73 @@
       (byDay[k] = byDay[k] || []).push(i);
     });
     const icons = { meeting: "◫", deadline: "▣", task: "☑", timeoff: "✈", finance: "$" };
-    el.innerHTML = ui.pageHead("Company calendar", "Meetings, deliveries, deadlines, and time off — next 30 days") +
+    el.innerHTML = ui.pageHead("Company calendar", "Meetings, deliveries, deadlines, and time off — next 30 days",
+        S.can("create", "meeting") ? `<button class="btn btn-gold" id="newMeeting">+ New meeting</button>` : "") +
       (Object.keys(byDay).length ? Object.entries(byDay).slice(0, 30).map(([day, evts]) => {
         const d = new Date(+day);
         const isToday = U.sameDay(+day, Date.now());
         return `<div class="cal-day ${isToday ? "today" : ""}">
           <div class="cal-date"><b>${d.toLocaleDateString("en-US", { weekday: "short" })}</b><span>${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>${isToday ? '<span class="badge tone-info">Today</span>' : ""}</div>
-          <div class="cal-events">${evts.map((e) => `<div class="cal-event ${e.link ? "clickable" : ""}" ${e.link ? `onclick="location.hash='${e.link}'"` : ""}><span class="list-icon">${icons[e.kind] || "•"}</span><span class="list-main"><b>${esc(e.label)}</b><span class="muted">${U.time(e.ts)} · ${esc(e.sub || "")}</span></span></div>`).join("")}</div>
+          <div class="cal-events">${evts.map((e) => `<div class="cal-event ${(e.link || e.meetingId) ? "clickable" : ""}" ${e.link ? `onclick="location.hash='${e.link}'"` : ""} ${e.meetingId ? `data-meeting="${e.meetingId}"` : ""}><span class="list-icon">${icons[e.kind] || "•"}</span><span class="list-main"><b>${esc(e.label)}</b><span class="muted">${U.time(e.ts)} · ${esc(e.sub || "")}</span></span></div>`).join("")}</div>
         </div>`;
       }).join("") : ui.empty("Nothing on the calendar."));
+    const nm = el.querySelector("#newMeeting");
+    if (nm) nm.addEventListener("click", () => meetingModal());
+    el.querySelectorAll("[data-meeting]").forEach((row) => row.addEventListener("click", () => meetingModal(S.find("meeting", row.dataset.meeting))));
   };
+
+  /* ================= MEETINGS (create/edit) =================
+     Attendee options are scoped by role: executives can invite anyone
+     (staff or client); a department head can invite their own department
+     plus any client; everyone else invites staff only — matching "execs
+     schedule with everything, dept heads with their dept + clients." */
+  function meetingModal(m) {
+    const me = S.me();
+    const isExec = S.isExec(me);
+    const isOwnerOrExec = !m || isExec || m.ownerId === me.id;
+    const attendeeFilter = (u) => {
+      if (u.portalType === "client") return isExec || me.role === "dept_head";
+      if (me.role === "dept_head" && !isExec) return u.dept === me.dept || u.id === me.id;
+      return true;
+    };
+    const fields = [
+      { name: "title", label: "Title", value: m && m.title, required: true, span2: true },
+      { name: "startsAt", label: "Date & time", type: "datetime-local", required: true, value: m ? new Date(m.ts - new Date(m.ts).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "" },
+      { name: "durationMin", label: "Duration (min)", type: "number", value: m ? m.durationMin : 30 },
+      { name: "location", label: "Location / link", value: m && m.location, placeholder: "Conference room, Zoom link…" },
+      { name: "clientId", label: "Client (optional)", type: "select", options: [["", "— None —"]].concat(S.db.clients.map((c) => [c.id, c.name])), value: m && m.clientId },
+      { name: "projectId", label: "Project (optional)", type: "select", options: [["", "— None —"]].concat(S.db.projects.filter((p) => p.status !== "archived").map((p) => [p.id, p.code + " · " + p.name])), value: m && m.projectId },
+      { name: "attendeeIds", label: "Attendees", type: "userMulti", span2: true, filter: attendeeFilter, value: m && Array.isArray(m.attendees) ? m.attendees : [] },
+      { name: "private", label: "Private (attendees only)", type: "select", options: [["false", "No — visible company-wide"], ["true", "Yes — attendees only"]], value: m ? String(!!m.private) : "false" },
+    ];
+    const modalRef = ui.formModal(m ? "Edit meeting" : "New meeting", fields, (v, close) => {
+      const assigneeIds = assigneeIdsFrom({ assigneeIds: v.attendeeIds });
+      const patch = {
+        title: v.title, ts: new Date(v.startsAt).getTime(), durationMin: +v.durationMin || 30,
+        location: v.location || null, clientId: v.clientId || null, projectId: v.projectId || null,
+        private: v.private === "true",
+      };
+      if (m) {
+        S.update("meeting", m.id, patch, "Updated meeting — " + v.title);
+        S.setMeetingAttendees(m.id, assigneeIds);
+      } else {
+        const created = S.create("meeting", Object.assign({ ownerId: me.id, attendees: assigneeIds, recurring: null, allStaff: false }, patch), "Scheduled meeting — " + v.title);
+        if (assigneeIds.length) S.notify(assigneeIds, "meeting", "Invited: " + v.title, U.dateTime(patch.ts), "#/calendar");
+      }
+      close(); ui.toast(m ? "Meeting updated." : "Meeting scheduled.", "good"); OM.router.refresh();
+    }, {
+      wide: true,
+      footer: (m && (isOwnerOrExec || S.can("delete", "meeting", m))) ? `<button class="btn btn-danger-ghost" id="delMeeting">Delete meeting</button>` : undefined,
+    });
+    if (m) {
+      const del = modalRef.el.querySelector("#delMeeting");
+      if (del) del.addEventListener("click", () => ui.confirmModal("Delete meeting", `Cancel "<b>${esc(m.title)}</b>"? This is recorded in the audit log.`, (reason) => {
+        S.remove("meeting", m.id, reason);
+        modalRef.close();
+        ui.toast("Meeting cancelled.", "good"); OM.router.refresh();
+      }, { danger: true, reason: true, okLabel: "Delete" }));
+    }
+  }
 
   /* ================= DIRECTORY ================= */
   OM.pages.directory = function (el) {
