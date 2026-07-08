@@ -101,6 +101,7 @@
         task_comments: { as: "comments", select: "*", map: (r) => ({ id: r.id, userId: r.user_id, text: r.body, ts: parseTs(r.created_at) }) },
         task_time_entries: { as: "timeEntries", select: "*", map: (r) => ({ id: r.id, userId: r.user_id, hours: Number(r.hours), date: parseTs(r.entry_date) }) },
         task_dependencies: { as: "dependsOn", select: "depends_on_id", map: (r) => r.depends_on_id, scalarList: true },
+        task_assignees: { as: "assigneeIds", select: "user_id", map: (r) => r.user_id, scalarList: true },
       },
     },
     invoice: {
