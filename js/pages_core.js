@@ -646,11 +646,11 @@
       exportName: "clients", exportEntity: "client",
       columns: [
         { key: "name", label: "Client", render: (c) => `<b>${esc(c.name)}</b><div class="muted">${esc(c.industry)} · ${esc(c.city)}</div>` },
-        { key: "tier", label: "Tier", width: "60px", render: (c) => `<span class="tier tier-${c.tier}">${c.tier}</span>` },
+        { key: "tier", label: "Tier", width: "60px", render: (c) => c.tier ? `<span class="tier tier-${c.tier}">${c.tier}</span>` : "" },
         { key: "ownerId", label: "Account owner", render: (c) => ui.userCell(c.ownerId), sortVal: (c) => S.userName(c.ownerId) },
         { key: "projects", label: "Active projects", render: (c) => String(S.db.projects.filter((p) => p.clientId === c.id && p.status === "active").length), sortVal: (c) => S.db.projects.filter((p) => p.clientId === c.id && p.status === "active").length },
         { key: "ar", label: "Open AR", render: (c) => U.money(S.db.invoices.filter((i) => i.clientId === c.id && ["sent", "overdue", "viewed", "partial"].includes(i.status)).reduce((s, i) => s + i.total, 0), { compact: true }), sortVal: (c) => S.db.invoices.filter((i) => i.clientId === c.id && ["sent", "overdue"].includes(i.status)).reduce((s, i) => s + i.total, 0) },
-        { key: "satisfaction", label: "CSAT", render: (c) => `<b>${c.satisfaction}</b><span class="muted">/10</span>`, sortVal: (c) => c.satisfaction },
+        { key: "satisfaction", label: "CSAT", render: (c) => c.satisfaction != null ? `<b>${c.satisfaction}</b><span class="muted">/10</span>` : '<span class="muted">—</span>', sortVal: (c) => c.satisfaction || 0 },
         { key: "status", label: "Status", render: (c) => ui.badge(c.status) },
       ],
       onRow: (c) => (location.hash = "#/client/" + c.id),
@@ -690,7 +690,7 @@
 
     el.innerHTML = ui.pageHead(esc(c.name),
       `${esc(c.industry)} · ${esc(c.city)} · client since ${U.date(c.since)} · owner ${esc(S.userName(c.ownerId))}`,
-      `${ui.badge(c.status)} <span class="tier tier-${c.tier}">${c.tier}</span>
+      `${ui.badge(c.status)} ${c.tier ? `<span class="tier tier-${c.tier}">${c.tier}</span>` : ""}
        ${S.can("edit", "client", c) ? `<button class="btn btn-ghost" id="editClient">Edit</button>` : ""}
        ${S.can("delete", "client", c) ? `<button class="btn btn-danger-ghost" id="delClient">Delete</button>` : ""}`) +
       `<div id="ctabs"></div><div id="cbody" class="tab-body"></div>`;
@@ -713,7 +713,7 @@
         { label: "Revenue YTD", value: showFinance ? U.money(revenueYTD ? revenueYTD.amt : 0, { compact: true }) : "—" },
         { label: "Open AR", value: showFinance ? U.money(openAR, { compact: true }) : "—", tone: cInvoices.some((i) => i.status === "overdue") ? "bad" : null, sub: cInvoices.some((i) => i.status === "overdue") ? "Overdue invoice on account" : "" },
         { label: "Active projects", value: cProjects.filter((p) => p.status === "active").length },
-        { label: "Satisfaction", value: c.satisfaction + "/10", tone: c.satisfaction >= 9 ? "good" : c.satisfaction < 7.5 ? "warn" : null },
+        { label: "Satisfaction", value: c.satisfaction != null ? c.satisfaction + "/10" : "—", tone: c.satisfaction >= 9 ? "good" : c.satisfaction != null && c.satisfaction < 7.5 ? "warn" : null },
       ]) + `<div class="grid-2">
         <div>${ui.sectionCard("Latest communications", cComms.slice(0, 6).map(commRow).join("") || ui.empty("No communications logged."), { action: `<a class="link" href="#/client/${c.id}/comms">All →</a>` })}</div>
         <div>${ui.sectionCard("Open work", cTasks.filter((t) => t.status !== "done").slice(0, 6).map(taskRow).join("") || ui.empty("No open tasks."))}
