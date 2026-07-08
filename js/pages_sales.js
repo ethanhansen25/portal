@@ -43,11 +43,11 @@
     el.innerHTML = ui.pageHead(isMgr ? "Sales command" : "My sales desk", isMgr ? "Team-wide view of pipeline, calls, and conversion" : "Your book, your calls, your numbers",
       `<a class="btn btn-gold" href="#/sales/calls">Open call queue</a>`) +
       ui.kpi([
-        { label: "Pipeline value", value: U.money(open.reduce((s, l) => s + l.value, 0), { compact: true }), sub: open.length + " open leads", link: "#/sales/pipeline" },
-        { label: "Calls today", value: callsToday.length, sub: callsWeek.length + " this week" },
-        { label: "Meetings booked (7d)", value: meetingsSet, sub: M.meetingsBookedThisMonth() + " this month", tone: "good" },
-        { label: "Conversion rate", value: M.conversionRate() + "%", sub: won30.length + " deals won all-time" },
-        { label: "Follow-ups due", value: followUps.length, tone: followUps.length ? "warn" : null, link: "#/sales/calls" },
+        { label: "Pipeline value", value: U.money(open.reduce((s, l) => s + l.value, 0), { compact: true }), sub: open.length + " open leads", link: "#/sales/pipeline", icon: "funnel" },
+        { label: "Calls today", value: callsToday.length, sub: callsWeek.length + " this week", icon: "phone" },
+        { label: "Meetings booked (7d)", value: meetingsSet, sub: M.meetingsBookedThisMonth() + " this month", tone: "good", icon: "calendar" },
+        { label: "Conversion rate", value: M.conversionRate() + "%", sub: won30.length + " deals won all-time", icon: "trending" },
+        { label: "Follow-ups due", value: followUps.length, tone: followUps.length ? "warn" : null, link: "#/sales/calls", icon: "clock" },
       ]) +
       `<div class="grid-2">
         <div>

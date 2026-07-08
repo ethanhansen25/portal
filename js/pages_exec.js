@@ -32,18 +32,18 @@
 
     el.innerHTML = ui.pageHead("Executive command", "The whole company on one screen — " + new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })) +
       ui.kpi([
-        { label: "Revenue today", value: U.money(M.revenueToday(), { compact: true }) },
+        { label: "Revenue today", value: U.money(M.revenueToday(), { compact: true }), icon: "dollar" },
         { label: "Revenue MTD", value: U.money(mtdRev, { compact: true }), spark: ch.spark(series.map((s) => s.revenue)) },
-        { label: "Revenue YTD", value: U.money(ytdRev, { compact: true }) },
-        { label: "Profit YTD", value: U.money(ytdRev - ytdExp, { compact: true }), tone: ytdRev - ytdExp >= 0 ? "good" : "bad", sub: "Expenses " + U.money(ytdExp, { compact: true }) },
-        { label: "Accounts receivable", value: U.money(M.arTotal(), { compact: true }), sub: M.overdue().length + " overdue invoices", tone: M.overdue().length ? "bad" : null, link: "#/finance/invoices" },
-        { label: "Payroll due", value: pay ? U.money(pay.total, { compact: true }) : "—", sub: pay ? U.until(pay.runDate) : "", link: "#/finance/payroll" },
-        { label: "Pipeline value", value: U.money(M.pipelineValue(), { compact: true }), sub: M.conversionRate() + "% conversion", link: "#/sales/pipeline" },
-        { label: "Cold calls today", value: callsToday.length, sub: M.meetingsBookedThisMonth() + " meetings booked MTD", link: "#/exec/sales" },
-        { label: "Projects at risk", value: atRisk.length + behind.length, sub: behind.length + " behind schedule", tone: atRisk.length + behind.length ? "warn" : "good", link: "#/projects" },
-        { label: "Approvals waiting", value: pending.length, tone: pending.length ? "warn" : null, link: "#/approvals" },
-        { label: "Client satisfaction", value: M.avgSatisfaction() + "/10", tone: "good" },
-        { label: "Staff online", value: online.length + "/" + S.db.users.filter((u) => u.status === "active").length, link: "#/exec/ops" },
+        { label: "Revenue YTD", value: U.money(ytdRev, { compact: true }), icon: "trending" },
+        { label: "Profit YTD", value: U.money(ytdRev - ytdExp, { compact: true }), tone: ytdRev - ytdExp >= 0 ? "good" : "bad", sub: "Expenses " + U.money(ytdExp, { compact: true }), icon: "ledger" },
+        { label: "Accounts receivable", value: U.money(M.arTotal(), { compact: true }), sub: M.overdue().length + " overdue invoices", tone: M.overdue().length ? "bad" : null, link: "#/finance/invoices", icon: "dollar" },
+        { label: "Payroll due", value: pay ? U.money(pay.total, { compact: true }) : "—", sub: pay ? U.until(pay.runDate) : "", link: "#/finance/payroll", icon: "users" },
+        { label: "Pipeline value", value: U.money(M.pipelineValue(), { compact: true }), sub: M.conversionRate() + "% conversion", link: "#/sales/pipeline", icon: "diamond" },
+        { label: "Cold calls today", value: callsToday.length, sub: M.meetingsBookedThisMonth() + " meetings booked MTD", link: "#/exec/sales", icon: "phone" },
+        { label: "Projects at risk", value: atRisk.length + behind.length, sub: behind.length + " behind schedule", tone: atRisk.length + behind.length ? "warn" : "good", link: "#/projects", icon: "layers" },
+        { label: "Approvals waiting", value: pending.length, tone: pending.length ? "warn" : null, link: "#/approvals", icon: "checkCircle" },
+        { label: "Client satisfaction", value: M.avgSatisfaction() + "/10", tone: "good", icon: "target" },
+        { label: "Staff online", value: online.length + "/" + S.db.users.filter((u) => u.status === "active").length, link: "#/exec/ops", icon: "compass" },
       ]) +
       `<div class="grid-2">
         <div>

@@ -25,10 +25,10 @@
       const mtd = M.revenueMTD(), emtd = M.expensesMTD();
       body.innerHTML = ui.kpi([
         { label: "Revenue MTD", value: U.money(mtd, { compact: true }), spark: ch.spark(series.map((s2) => s2.revenue)) },
-        { label: "Revenue YTD", value: U.money(M.revenueYTD(), { compact: true }) },
-        { label: "Expenses MTD", value: U.money(emtd, { compact: true }) },
-        { label: "Net MTD", value: U.money(mtd - emtd, { compact: true }), tone: mtd - emtd >= 0 ? "good" : "bad" },
-        { label: "Accounts receivable", value: U.money(M.arTotal(), { compact: true }), sub: M.overdue().length + " overdue", tone: M.overdue().length ? "warn" : null, link: "#/finance/invoices" },
+        { label: "Revenue YTD", value: U.money(M.revenueYTD(), { compact: true }), icon: "trending" },
+        { label: "Expenses MTD", value: U.money(emtd, { compact: true }), icon: "ledger" },
+        { label: "Net MTD", value: U.money(mtd - emtd, { compact: true }), tone: mtd - emtd >= 0 ? "good" : "bad", icon: "dollar" },
+        { label: "Accounts receivable", value: U.money(M.arTotal(), { compact: true }), sub: M.overdue().length + " overdue", tone: M.overdue().length ? "warn" : null, link: "#/finance/invoices", icon: "clock" },
       ]) + `<div class="grid-2">
         <div>${ui.sectionCard("Revenue vs expenses — 12 months", '<div id="revChart"></div>')}</div>
         <div>${ui.sectionCard("Expenses by category — 90 days", '<div id="expChart"></div>')}</div>

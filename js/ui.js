@@ -34,7 +34,10 @@
   function kpi(items) {
     return '<div class="kpi-grid">' + items.map((k) => `
       <div class="card kpi ${k.link ? "clickable" : ""}" ${k.link ? `onclick="location.hash='${k.link}'"` : ""}>
-        <div class="kpi-top"><span class="kpi-label">${esc(k.label)}</span>${k.spark || ""}</div>
+        <div class="kpi-top">
+          <span class="kpi-label">${esc(k.label)}</span>
+          ${k.icon ? `<span class="kpi-icon">${OM.icon(k.icon)}</span>` : (k.spark || "")}
+        </div>
         <div class="kpi-value ${k.tone ? "tone-text-" + k.tone : ""}">${k.value}</div>
         ${k.sub ? `<div class="kpi-sub">${k.sub}</div>` : ""}
       </div>`).join("") + "</div>";
@@ -43,10 +46,16 @@
   /* ---------- DATA TABLE with search / sort / export ---------- */
   let tableSeq = 0;
   function table(el, cfg) {
-    // cfg: { columns:[{key,label,render?,sortVal?,width?}], rows, searchKeys, onRow?, exportName?, empty?, pageSize?, actions? (html right of search), defaultSort? }
+    // cfg: { columns:[{key,label,render?,sortVal?,width?,noFilter?}], rows, searchKeys, onRow?, exportName?, empty?, pageSize?, actions? (html right of search), defaultSort?, noColumnFilters? }
     const id = "tbl" + tableSeq++;
-    const state = { q: "", sortKey: cfg.defaultSort ? cfg.defaultSort.key : null, sortDir: cfg.defaultSort ? cfg.defaultSort.dir : 1, page: 0 };
+    const state = { q: "", sortKey: cfg.defaultSort ? cfg.defaultSort.key : null, sortDir: cfg.defaultSort ? cfg.defaultSort.dir : 1, page: 0, colFilters: {} };
     const pageSize = cfg.pageSize || 25;
+    const showColFilters = !cfg.noColumnFilters && cfg.columns.length > 1;
+
+    function colText(c, r) {
+      const v = c.sortVal ? c.sortVal(r) : r[c.key];
+      return v == null ? "" : String(v);
+    }
 
     function filtered() {
       let rows = cfg.rows();
@@ -55,6 +64,13 @@
         rows = rows.filter((r) => (cfg.searchKeys || []).some((k) => {
           const v = typeof k === "function" ? k(r) : r[k];
           return v != null && String(v).toLowerCase().includes(q);
+        }));
+      }
+      const activeFilters = Object.entries(state.colFilters).filter(([, v]) => v);
+      if (activeFilters.length) {
+        rows = rows.filter((r) => activeFilters.every(([key, q]) => {
+          const col = cfg.columns.find((c) => c.key === key);
+          return col && colText(col, r).toLowerCase().includes(q.toLowerCase());
         }));
       }
       if (state.sortKey) {
@@ -83,9 +99,14 @@
           ${cfg.actions || ""}
           ${cfg.exportName ? `<button class="btn btn-ghost btn-sm" data-role="export" title="Export CSV">⤓ Export</button>` : ""}
         </div>
-        <div class="table-scroll"><table class="data-table"><thead><tr>
+        <div class="table-scroll"><table class="data-table"><thead>
+        <tr class="head-row">
           ${cfg.columns.map((c) => `<th ${c.width ? `style="width:${c.width}"` : ""} data-key="${c.key}" class="${c.key === state.sortKey ? "sorted" : ""}">${esc(c.label)}${c.key === state.sortKey ? (state.sortDir > 0 ? " ↑" : " ↓") : ""}</th>`).join("")}
-        </tr></thead><tbody>
+        </tr>
+        ${showColFilters ? `<tr class="filter-row">
+          ${cfg.columns.map((c) => `<th>${c.noFilter ? "" : `<input type="text" class="col-filter" data-key="${c.key}" placeholder="Filter…" value="${esc(state.colFilters[c.key] || "")}">`}</th>`).join("")}
+        </tr>` : ""}
+        </thead><tbody>
           ${pageRows.length === 0 ? `<tr><td colspan="${cfg.columns.length}" class="table-empty">${esc(cfg.empty || "No records match.")}</td></tr>` :
           pageRows.map((r, i) => `<tr data-idx="${i}" class="${cfg.onRow ? "row-click" : ""}">${cfg.columns.map((c) => `<td>${c.render ? c.render(r) : esc(r[c.key] == null ? "—" : r[c.key])}</td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
@@ -93,7 +114,14 @@
 
       const qInput = el.querySelector('[data-role="q"]');
       qInput.addEventListener("input", () => { state.q = qInput.value; state.page = 0; const pos = qInput.selectionStart; render(); const nq = el.querySelector('[data-role="q"]'); nq.focus(); nq.setSelectionRange(pos, pos); });
-      el.querySelectorAll("th").forEach((th) => th.addEventListener("click", () => {
+      el.querySelectorAll(".col-filter").forEach((inp) => inp.addEventListener("input", () => {
+        state.colFilters[inp.dataset.key] = inp.value; state.page = 0;
+        const key = inp.dataset.key, pos = inp.selectionStart;
+        render();
+        const ninp = el.querySelector(`.col-filter[data-key="${key}"]`);
+        if (ninp) { ninp.focus(); ninp.setSelectionRange(pos, pos); }
+      }));
+      el.querySelectorAll(".head-row th").forEach((th) => th.addEventListener("click", () => {
         const k = th.dataset.key;
         if (state.sortKey === k) state.sortDir *= -1; else { state.sortKey = k; state.sortDir = 1; }
         render();
