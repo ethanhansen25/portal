@@ -250,14 +250,22 @@
           S.update("candidate", c.id, { stage: col }, "Moved candidate " + c.name + " → " + U.cap(col));
           OM.router.refresh();
         },
-        onCard: (c) => ui.modal(c.name, `<div class="detail-grid">
+        onCard: (c) => {
+          const canDel = S.can("delete", "candidate", c);
+          const m = ui.modal(c.name, `<div class="detail-grid">
             <div><span class="detail-label">Role</span><b>${esc(c.roleApplied)}</b></div>
             <div><span class="detail-label">Department</span><b>${esc(c.dept)}</b></div>
             <div><span class="detail-label">Applied</span><b>${U.date(c.appliedAt)}</b></div>
             <div><span class="detail-label">Source</span><b>${esc(c.source)}</b></div>
             <div><span class="detail-label">Rating</span><b>${"★".repeat(c.rating || 0) || "unrated"}</b></div>
             <div><span class="detail-label">Email</span><b>${esc(c.email)}</b></div>
-          </div><p class="body-text">${esc(c.notes || "No notes.")}</p>`),
+          </div><p class="body-text">${esc(c.notes || "No notes.")}</p>`,
+            { footer: canDel ? `<button class="btn btn-danger-ghost" id="delCand">Remove from board</button>` : "" });
+          if (canDel) m.el.querySelector("#delCand").addEventListener("click", () => ui.confirmModal("Remove candidate", `Remove "<b>${esc(c.name)}</b>" from the hiring board? This is recorded in the audit log.`, (reason) => {
+            S.remove("candidate", c.id, reason);
+            m.close(); ui.toast("Removed.", "good"); OM.router.refresh();
+          }, { danger: true, reason: true, okLabel: "Remove" }));
+        },
       });
       const nc = body.querySelector("#newCand");
       if (nc) nc.addEventListener("click", () => ui.formModal("Add candidate", [
@@ -539,7 +547,8 @@
       const rows = S.db.equipment.filter((e) => activeCat === "All" || e.category === activeCat);
       const counts = { available: 0, checked_out: 0, maintenance: 0, damaged: 0, assigned: 0 };
       S.db.equipment.forEach((e) => counts[e.status] !== undefined && counts[e.status]++);
-      el.innerHTML = ui.pageHead("Equipment room", "Every asset, its condition, and who has it") +
+      el.innerHTML = ui.pageHead("Equipment room", "Every asset, its condition, and who has it",
+          S.can("create", "equipment") ? `<button class="btn btn-gold" id="newEquip">+ Add equipment</button>` : "") +
         ui.kpi([
           { label: "Fleet value", value: U.money(S.db.equipment.reduce((s2, e) => s2 + e.value, 0), { compact: true }), sub: S.db.equipment.length + " assets" },
           { label: "Available", value: counts.available, tone: "good" },
@@ -560,9 +569,46 @@
               ${(e.status === "checked_out") && S.can("checkin", "equipment", e) && (e.assignedTo === me.id || S.isExec(me) || me.dept === "Technology" || me.role === "dept_head") ? `<button class="btn btn-ghost btn-sm" data-in="${e.id}">Check in</button>` : ""}
               ${S.can("manage", "equipment", e) && e.status !== "maintenance" ? `<button class="btn btn-ghost btn-sm" data-mnt="${e.id}">→ Maintenance</button>` : ""}
               ${S.can("manage", "equipment", e) && (e.status === "maintenance" || e.status === "damaged") ? `<button class="btn btn-ghost btn-sm" data-fix="${e.id}">Mark repaired</button>` : ""}
+              ${S.can("edit", "equipment", e) ? `<button class="btn btn-ghost btn-sm" data-edit-eq="${e.id}">Edit</button>` : ""}
+              ${S.can("delete", "equipment", e) ? `<button class="btn btn-danger-ghost btn-sm" data-del-eq="${e.id}">Delete</button>` : ""}
             </div>
           </div>`).join("")}</div>`;
       el.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => { activeCat = b.dataset.cat; draw(); }));
+      const newEq = el.querySelector("#newEquip");
+      if (newEq) newEq.addEventListener("click", () => ui.formModal("Add equipment", [
+        { name: "assetTag", label: "Asset tag", required: true, placeholder: "e.g. CAM-014" },
+        { name: "name", label: "Name", required: true, span2: true, placeholder: "e.g. Sony FX6 Camera Body" },
+        { name: "category", label: "Category", placeholder: "e.g. Cameras, Lenses, Audio, Lighting, Computers" },
+        { name: "serial", label: "Serial number" },
+        { name: "value", label: "Value ($)", type: "number" },
+        { name: "location", label: "Location", value: "Studio A cage" },
+        { name: "note", label: "Notes", type: "textarea", span2: true },
+      ], (v, close) => {
+        S.create("equipment", { assetTag: v.assetTag, name: v.name, category: v.category || "Uncategorized", serial: v.serial, status: "available", condition: "good", value: v.value ? +v.value : 0, purchaseDate: Date.now(), location: v.location, note: v.note }, "Added equipment — " + v.name);
+        close(); ui.toast("Equipment added.", "good"); draw();
+      }));
+      el.querySelectorAll("[data-edit-eq]").forEach((b) => b.addEventListener("click", () => {
+        const e = S.find("equipment", b.dataset.editEq);
+        ui.formModal("Edit " + e.name, [
+          { name: "name", label: "Name", value: e.name, required: true, span2: true },
+          { name: "category", label: "Category", value: e.category },
+          { name: "serial", label: "Serial number", value: e.serial },
+          { name: "value", label: "Value ($)", type: "number", value: e.value },
+          { name: "location", label: "Location", value: e.location },
+          { name: "note", label: "Notes", type: "textarea", value: e.note, span2: true },
+        ], (v, close) => {
+          S.update("equipment", e.id, { name: v.name, category: v.category, serial: v.serial, value: v.value ? +v.value : 0, location: v.location, note: v.note }, "Updated equipment — " + v.name);
+          close(); ui.toast("Equipment updated.", "good"); draw();
+        }, { wide: true });
+      }));
+      el.querySelectorAll("[data-del-eq]").forEach((b) => b.addEventListener("click", () => {
+        const e = S.find("equipment", b.dataset.delEq);
+        ui.confirmModal("Delete equipment", `Delete "<b>${esc(e.name)}</b>" (${esc(e.assetTag)})? This is recorded in the audit log.`, (reason) => {
+          S.remove("equipment", e.id, reason);
+          ui.toast("Equipment deleted.", "good");
+          draw();
+        }, { danger: true, reason: true, okLabel: "Delete" });
+      }));
       el.querySelectorAll("[data-out]").forEach((b) => b.addEventListener("click", () => ui.formModal("Check out equipment", [
         { name: "projectId", label: "For project", type: "select", options: [["", "— General use —"]].concat(S.db.projects.filter((p) => p.status === "active").map((p) => [p.id, p.code + " · " + p.name])) },
       ], (v, close) => { S.checkoutEquipment(b.dataset.out, v.projectId || null); close(); ui.toast("Checked out. It's on you now.", "good"); draw(); })));

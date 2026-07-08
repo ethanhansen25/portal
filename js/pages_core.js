@@ -658,7 +658,9 @@
 
     el.innerHTML = ui.pageHead(esc(c.name),
       `${esc(c.industry)} · ${esc(c.city)} · client since ${U.date(c.since)} · owner ${esc(S.userName(c.ownerId))}`,
-      `${ui.badge(c.status)} <span class="tier tier-${c.tier}">${c.tier}</span>`) +
+      `${ui.badge(c.status)} <span class="tier tier-${c.tier}">${c.tier}</span>
+       ${S.can("edit", "client", c) ? `<button class="btn btn-ghost" id="editClient">Edit</button>` : ""}
+       ${S.can("delete", "client", c) ? `<button class="btn btn-danger-ghost" id="delClient">Delete</button>` : ""}`) +
       `<div id="ctabs"></div><div id="cbody" class="tab-body"></div>`;
 
     const tabDefs = [
@@ -737,6 +739,26 @@
         ui.toast("Notes saved.", "good");
       });
     }
+    const delBtn = el.querySelector("#delClient");
+    if (delBtn) delBtn.addEventListener("click", () => ui.confirmModal("Delete client", `Delete "<b>${esc(c.name)}</b>"? This removes their projects, invoices, and files too. This is recorded in the audit log.`, (reason) => {
+      S.remove("client", c.id, reason);
+      ui.toast("Client deleted.", "good");
+      location.hash = "#/clients";
+    }, { danger: true, reason: true, okLabel: "Delete" }));
+    const editBtn = el.querySelector("#editClient");
+    if (editBtn) editBtn.addEventListener("click", () => ui.formModal("Edit " + c.name, [
+      { name: "name", label: "Company name", value: c.name, required: true, span2: true },
+      { name: "industry", label: "Industry", value: c.industry },
+      { name: "city", label: "City", value: c.city },
+      { name: "tier", label: "Tier", type: "select", options: ["A", "B", "C"], value: c.tier },
+      { name: "website", label: "Website", value: c.website },
+      { name: "ownerId", label: "Account owner", type: "user", value: c.ownerId },
+      { name: "status", label: "Status", type: "select", options: [["active", "Active"], ["paused", "Paused"], ["archived", "Archived"]], value: c.status },
+      { name: "satisfaction", label: "Satisfaction (0-10)", type: "number", value: c.satisfaction, step: "0.1" },
+    ], (v, close) => {
+      S.update("client", c.id, { name: v.name, industry: v.industry, city: v.city, tier: v.tier, website: v.website, ownerId: v.ownerId, status: v.status, satisfaction: +v.satisfaction }, "Updated client — " + v.name);
+      close(); ui.toast("Client updated.", "good"); OM.router.refresh();
+    }, { wide: true }));
   };
 
   /* ================= CONTRACTS & PROPOSALS (staff-side) =================

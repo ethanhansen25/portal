@@ -326,13 +326,23 @@
     /* ---------- STORAGE ----------
        avatars: public bucket, path {userId}/{filename} — RLS restricts write
        to the user's own folder (supabase/migrations/0004_storage.sql).
-       attachments: private bucket, path {resources|documents}/{recordId}/
-       {filename} — RLS re-checks the same visibility as the owning table row. */
+       attachments: private bucket, path {resources|documents|deliverables|
+       onboarding}/{recordId}/{filename} — RLS re-checks the same visibility
+       as the owning table row. If either bucket is missing (a fresh project
+       that skipped 0004, or a partial migration run), Supabase returns a
+       bare "Bucket not found" — surfaced here with a pointer to the fix
+       instead of leaving that cryptic on its own. */
+    friendlyStorageError(error) {
+      if (error && /bucket not found/i.test(error.message || "")) {
+        return new Error("Storage bucket not found — run supabase/migrations/0011_ensure_storage_buckets.sql in the Supabase SQL editor, then try again.");
+      }
+      return error;
+    },
     async uploadAvatar(userId, file) {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
       const path = `${userId}/avatar-${Date.now()}.${ext}`;
       const { error } = await DB.client.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
-      if (error) throw error;
+      if (error) throw DB.friendlyStorageError(error);
       const { data } = DB.client.storage.from("avatars").getPublicUrl(path);
       return data.publicUrl;
     },
@@ -340,17 +350,17 @@
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const path = `${kind}/${recordId}/${Date.now()}-${safeName}`;
       const { error } = await DB.client.storage.from("attachments").upload(path, file, { contentType: file.type });
-      if (error) throw error;
+      if (error) throw DB.friendlyStorageError(error);
       return { path, size: file.size, type: file.type, name: file.name };
     },
     async attachmentSignedUrl(path, seconds = 300) {
       const { data, error } = await DB.client.storage.from("attachments").createSignedUrl(path, seconds);
-      if (error) throw error;
+      if (error) throw DB.friendlyStorageError(error);
       return data.signedUrl;
     },
     async deleteAttachment(path) {
       const { error } = await DB.client.storage.from("attachments").remove([path]);
-      if (error) throw error;
+      if (error) throw DB.friendlyStorageError(error);
     },
   });
 })();

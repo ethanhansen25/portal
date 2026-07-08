@@ -322,7 +322,7 @@
             if (role === "contractor") return rec && (rec.status !== "checked_out" ? true : rec.assignedTo === u.id);
             return true;
           }
-          if (action === "edit" || action === "manage") return dept === "Technology" || role === "dept_head";
+          if (action === "create" || action === "edit" || action === "manage") return dept === "Technology" || role === "dept_head";
           if (action === "delete") return dept === "Technology" && role === "dept_head";
           return false;
         }
