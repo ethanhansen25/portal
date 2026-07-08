@@ -17,17 +17,17 @@
 
   /* ================= SHELL ================= */
   const NAV = [
-    { hash: "#/c/", icon: "◆", label: "Dashboard", match: /^#\/c\/?$/ },
-    { hash: "#/c/projects", icon: "▣", label: "Projects", match: /^#\/c\/project/ },
-    { hash: "#/c/deliverables", icon: "▤", label: "Deliverables", match: /^#\/c\/deliverables/ },
-    { hash: "#/c/approvals", icon: "✓", label: "Approvals", match: /^#\/c\/approvals/ },
-    { hash: "#/c/contracts", icon: "✎", label: "Contracts", match: /^#\/c\/contract/ },
-    { hash: "#/c/proposals", icon: "◈", label: "Proposals", match: /^#\/c\/proposal/ },
-    { hash: "#/c/invoices", icon: "$", label: "Invoices", match: /^#\/c\/invoices/ },
-    { hash: "#/c/files", icon: "▦", label: "Files", match: /^#\/c\/files/ },
-    { hash: "#/c/messages", icon: "✉", label: "Messages", match: /^#\/c\/messages/ },
-    { hash: "#/c/meetings", icon: "◫", label: "Meetings", match: /^#\/c\/meetings/ },
-    { hash: "#/c/support", icon: "☺", label: "Support", match: /^#\/c\/support/ },
+    { hash: "#/c/", icon: OM.icon("home"), label: "Dashboard", match: /^#\/c\/?$/ },
+    { hash: "#/c/projects", icon: OM.icon("layers"), label: "Projects", match: /^#\/c\/project/ },
+    { hash: "#/c/deliverables", icon: OM.icon("package"), label: "Deliverables", match: /^#\/c\/deliverables/ },
+    { hash: "#/c/approvals", icon: OM.icon("checkCircle"), label: "Approvals", match: /^#\/c\/approvals/ },
+    { hash: "#/c/contracts", icon: OM.icon("signature"), label: "Contracts", match: /^#\/c\/contract/ },
+    { hash: "#/c/proposals", icon: OM.icon("diamond"), label: "Proposals", match: /^#\/c\/proposal/ },
+    { hash: "#/c/invoices", icon: OM.icon("dollar"), label: "Invoices", match: /^#\/c\/invoices/ },
+    { hash: "#/c/files", icon: OM.icon("folder"), label: "Files", match: /^#\/c\/files/ },
+    { hash: "#/c/messages", icon: OM.icon("chat"), label: "Messages", match: /^#\/c\/messages/ },
+    { hash: "#/c/meetings", icon: OM.icon("clock"), label: "Meetings", match: /^#\/c\/meetings/ },
+    { hash: "#/c/support", icon: OM.icon("lifeBuoy"), label: "Support", match: /^#\/c\/support/ },
   ];
 
   CP.renderShell = function () {
@@ -46,10 +46,10 @@
         </aside>
         <div class="main-col">
           <header class="topbar">
-            <button class="icon-btn burger" id="burger">☰</button>
+            <button class="icon-btn burger" id="burger">${OM.icon("menu")}</button>
             <div class="flex-spacer"></div>
-            <button class="icon-btn" id="themeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? "☀" : "☾"}</button>
-            <button class="icon-btn bell" id="bellBtn" title="Notifications">◉<span class="bell-count" id="bellCount"></span></button>
+            <button class="icon-btn" id="themeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? OM.icon("sun") : OM.icon("moon")}</button>
+            <button class="icon-btn bell" id="bellBtn" title="Notifications">${OM.icon("bell")}<span class="bell-count" id="bellCount"></span></button>
             <div class="user-menu-wrap">
               <button class="icon-btn" id="userBtn">${ui.avatar(u)}</button>
               <div class="user-menu" id="userMenu">
@@ -65,7 +65,7 @@
     renderNav();
     document.getElementById("burger").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
     document.getElementById("bellBtn").addEventListener("click", () => (location.hash = "#/c/notifications"));
-    document.getElementById("themeBtn").addEventListener("click", (e) => { OM.theme.toggle(); e.currentTarget.textContent = OM.theme.get() === "dark" ? "☀" : "☾"; });
+    document.getElementById("themeBtn").addEventListener("click", (e) => { OM.theme.toggle(); e.currentTarget.innerHTML = OM.theme.get() === "dark" ? OM.icon("sun") : OM.icon("moon"); });
     const userBtn = document.getElementById("userBtn"), menu = document.getElementById("userMenu");
     userBtn.addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("open"); });
     document.addEventListener("click", () => menu.classList.remove("open"));

@@ -10,54 +10,55 @@
     const me = S.me();
     const has = (m) => S.moduleAccess(m, me);
     const sections = [];
+    const ic = OM.icon;
     sections.push({
       label: "Workspace",
       items: [
-        { hash: "#/", icon: "◆", label: "Home", match: /^#\/$/ },
-        { hash: "#/tasks", icon: "☑", label: "Tasks", match: /^#\/task/ },
-        { hash: "#/projects", icon: "▣", label: "Projects", match: /^#\/project/ },
-        { hash: "#/calendar", icon: "◫", label: "Calendar", match: /^#\/calendar/ },
-        { hash: "#/notifications", icon: "◉", label: "Notifications", match: /^#\/notifications/, count: () => S.unreadCount() },
+        { hash: "#/", icon: ic("home"), label: "Home", match: /^#\/$/ },
+        { hash: "#/tasks", icon: ic("checklist"), label: "Tasks", match: /^#\/task/ },
+        { hash: "#/projects", icon: ic("layers"), label: "Projects", match: /^#\/project/ },
+        { hash: "#/calendar", icon: ic("calendar"), label: "Calendar", match: /^#\/calendar/ },
+        { hash: "#/notifications", icon: ic("bell"), label: "Notifications", match: /^#\/notifications/, count: () => S.unreadCount() },
       ],
     });
     if (has("exec")) sections.push({
       label: "Executive",
       lock: true,
       items: [
-        { hash: "#/exec", icon: "✦", label: "Command center", match: /^#\/exec$/ },
-        { hash: "#/exec/analytics", icon: "∿", label: "Company analytics", match: /^#\/exec\/analytics/ },
-        { hash: "#/exec/sales", icon: "▲", label: "Sales dashboard", match: /^#\/exec\/sales/ },
-        { hash: "#/exec/ops", icon: "◎", label: "Operations center", match: /^#\/exec\/ops/ },
-        { hash: "#/exec/hiring", icon: "☺", label: "Hiring center", match: /^#\/exec\/hiring/ },
-        { hash: "#/exec/board", icon: "❖", label: "Board room", match: /^#\/exec\/board/ },
-        { hash: "#/exec/risk", icon: "⚠", label: "Risk & legal", match: /^#\/exec\/risk/ },
-        { hash: "#/exec/audit", icon: "≡", label: "Audit center", match: /^#\/exec\/audit/ },
+        { hash: "#/exec", icon: ic("compass"), label: "Command center", match: /^#\/exec$/ },
+        { hash: "#/exec/analytics", icon: ic("trending"), label: "Company analytics", match: /^#\/exec\/analytics/ },
+        { hash: "#/exec/sales", icon: ic("diamond"), label: "Sales dashboard", match: /^#\/exec\/sales/ },
+        { hash: "#/exec/ops", icon: ic("target"), label: "Operations center", match: /^#\/exec\/ops/ },
+        { hash: "#/exec/hiring", icon: ic("users"), label: "Hiring center", match: /^#\/exec\/hiring/ },
+        { hash: "#/exec/board", icon: ic("shield"), label: "Board room", match: /^#\/exec\/board/ },
+        { hash: "#/exec/risk", icon: ic("alert"), label: "Risk & legal", match: /^#\/exec\/risk/ },
+        { hash: "#/exec/audit", icon: ic("ledger"), label: "Audit center", match: /^#\/exec\/audit/ },
       ],
     });
     if (has("sales")) sections.push({
       label: "Sales",
       items: [
-        { hash: "#/sales", icon: "◈", label: "Sales desk", match: /^#\/sales$/ },
-        { hash: "#/sales/pipeline", icon: "⇶", label: "Pipeline", match: /^#\/sales\/pipeline|^#\/lead/ },
-        { hash: "#/sales/leads", icon: "☰", label: "Leads", match: /^#\/sales\/leads/ },
-        { hash: "#/sales/calls", icon: "☎", label: "Cold call desk", match: /^#\/sales\/calls/ },
-        { hash: "#/sales/commissions", icon: "$", label: "Commissions", match: /^#\/sales\/commissions/ },
+        { hash: "#/sales", icon: ic("diamond"), label: "Sales desk", match: /^#\/sales$/ },
+        { hash: "#/sales/pipeline", icon: ic("funnel"), label: "Pipeline", match: /^#\/sales\/pipeline|^#\/lead/ },
+        { hash: "#/sales/leads", icon: ic("list"), label: "Leads", match: /^#\/sales\/leads/ },
+        { hash: "#/sales/calls", icon: ic("phone"), label: "Cold call desk", match: /^#\/sales\/calls/ },
+        { hash: "#/sales/commissions", icon: ic("dollar"), label: "Commissions", match: /^#\/sales\/commissions/ },
       ],
     });
     const company = { label: "Company", items: [] };
-    if (has("clients")) company.items.push({ hash: "#/clients", icon: "◇", label: "Clients", match: /^#\/client/ });
-    if (has("comms")) company.items.push({ hash: "#/comms", icon: "✉", label: "Communications", match: /^#\/comms/ });
-    if (has("finance")) company.items.push({ hash: "#/finance", icon: "¤", label: "Finance", match: /^#\/finance/ });
-    if (has("hr")) company.items.push({ hash: "#/hr", icon: "☺", label: "People (HR)", match: /^#\/hr/ });
-    if (has("equipment")) company.items.push({ hash: "#/equipment", icon: "⚙", label: "Equipment", match: /^#\/equipment/ });
-    if (has("approvals")) company.items.push({ hash: "#/approvals", icon: "✓", label: "Approvals", match: /^#\/approvals/, count: () => M.approvalsPending().filter((a) => S.can("approve", "approval", a)).length });
+    if (has("clients")) company.items.push({ hash: "#/clients", icon: ic("building"), label: "Clients", match: /^#\/client/ });
+    if (has("comms")) company.items.push({ hash: "#/comms", icon: ic("mail"), label: "Communications", match: /^#\/comms/ });
+    if (has("finance")) company.items.push({ hash: "#/finance", icon: ic("dollar"), label: "Finance", match: /^#\/finance/ });
+    if (has("hr")) company.items.push({ hash: "#/hr", icon: ic("users"), label: "People (HR)", match: /^#\/hr/ });
+    if (has("equipment")) company.items.push({ hash: "#/equipment", icon: ic("wrench"), label: "Equipment", match: /^#\/equipment/ });
+    if (has("approvals")) company.items.push({ hash: "#/approvals", icon: ic("checkCircle"), label: "Approvals", match: /^#\/approvals/, count: () => M.approvalsPending().filter((a) => S.can("approve", "approval", a)).length });
     sections.push(company);
     sections.push({
       label: "Library",
       items: [
-        { hash: "#/resources", icon: "▤", label: "Resources", match: /^#\/resources/ },
-        { hash: "#/documents", icon: "▦", label: "Documents", match: /^#\/documents/ },
-        { hash: "#/directory", icon: "☷", label: "Directory", match: /^#\/directory/ },
+        { hash: "#/resources", icon: ic("archive"), label: "Resources", match: /^#\/resources/ },
+        { hash: "#/documents", icon: ic("file"), label: "Documents", match: /^#\/documents/ },
+        { hash: "#/directory", icon: ic("grid"), label: "Directory", match: /^#\/directory/ },
       ],
     });
     return sections;
@@ -122,13 +123,14 @@
         </aside>
         <div class="main-col">
           <header class="topbar">
-            <button class="icon-btn burger" id="burger">☰</button>
+            <button class="icon-btn burger" id="burger">${OM.icon("menu")}</button>
             <div class="global-search">
+              <span class="gs-icon">${OM.icon("search")}</span>
               <input type="text" id="gSearch" placeholder="Search people, clients, projects, leads, documents…" autocomplete="off"><span class="gs-kbd">⌘K</span>
               <div class="gs-results" id="gsResults"></div>
             </div>
-            <button class="icon-btn" id="themeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? "☀" : "☾"}</button>
-            <button class="icon-btn bell" id="bellBtn" title="Notifications">◉<span class="bell-count" id="bellCount"></span></button>
+            <button class="icon-btn" id="themeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? OM.icon("sun") : OM.icon("moon")}</button>
+            <button class="icon-btn bell" id="bellBtn" title="Notifications">${OM.icon("bell")}<span class="bell-count" id="bellCount"></span></button>
             <div class="user-menu-wrap">
               <button class="icon-btn" id="userBtn">${ui.avatar(me)}</button>
               <div class="user-menu" id="userMenu">
@@ -183,7 +185,7 @@
     document.getElementById("bellBtn").addEventListener("click", () => (location.hash = "#/notifications"));
     document.getElementById("themeBtn").addEventListener("click", (e) => {
       OM.theme.toggle();
-      e.currentTarget.textContent = OM.theme.get() === "dark" ? "☀" : "☾";
+      e.currentTarget.innerHTML = OM.theme.get() === "dark" ? OM.icon("sun") : OM.icon("moon");
     });
     const userBtn = document.getElementById("userBtn");
     const menu = document.getElementById("userMenu");
@@ -368,7 +370,7 @@
     document.body.className = "auth-body";
     document.body.innerHTML = `
       <div class="auth">
-        <button class="icon-btn auth-theme-btn" id="authThemeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? "☀" : "☾"}</button>
+        <button class="icon-btn auth-theme-btn" id="authThemeBtn" title="Toggle light/dark theme">${OM.theme.get() === "dark" ? OM.icon("sun") : OM.icon("moon")}</button>
         <div class="auth-aside">
           <div class="auth-brand"><div class="brand-mark xl">O</div><span>Oakframe Media</span></div>
           <div class="auth-pitch">
