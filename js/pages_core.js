@@ -40,10 +40,10 @@
       [me.title, me.dept, new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })].filter(Boolean).map(esc).join(" · ")) +
       (myOnboarding ? onboardingCard(myOnboarding) : "") +
       ui.kpi([
-        { label: "My open tasks", value: myTasks.length, sub: overdueTasks.length ? `<span class="tone-text-bad">${overdueTasks.length} overdue</span>` : "All on schedule", link: "#/tasks" },
-        { label: "Active projects", value: myProjects.length, sub: myProjects.filter((p) => p.health !== "on_track").length + " need attention", link: "#/projects" },
-        { label: "Meetings this week", value: myMeetings.length, sub: myMeetings[0] ? "Next: " + U.until(myMeetings[0].ts) : "None scheduled", link: "#/calendar" },
-        { label: "Notifications", value: unread, sub: myApprovalsWaiting ? myApprovalsWaiting + " approvals waiting on you" : "Inbox is clear", link: "#/notifications", tone: unread ? "warn" : null },
+        { label: "My open tasks", value: myTasks.length, sub: overdueTasks.length ? `<span class="tone-text-bad">${overdueTasks.length} overdue</span>` : "All on schedule", link: "#/tasks", icon: "checklist" },
+        { label: "Active projects", value: myProjects.length, sub: myProjects.filter((p) => p.health !== "on_track").length + " need attention", link: "#/projects", icon: "layers" },
+        { label: "Meetings this week", value: myMeetings.length, sub: myMeetings[0] ? "Next: " + U.until(myMeetings[0].ts) : "None scheduled", link: "#/calendar", icon: "calendar" },
+        { label: "Notifications", value: unread, sub: myApprovalsWaiting ? myApprovalsWaiting + " approvals waiting on you" : "Inbox is clear", link: "#/notifications", tone: unread ? "warn" : null, icon: "bell" },
       ]) +
       `<div class="grid-2">
         <div>${ui.sectionCard("My tasks", myTasks.length ? myTasks.slice(0, 8).map((t) => taskRow(t)).join("") : ui.empty("No open tasks. Enjoy the calm."), { action: `<a class="link" href="#/tasks">View all →</a>` })}</div>
