@@ -463,7 +463,7 @@
     ui.formModal("Upload document", [
       { name: "file", label: "File", type: "file", required: true, span2: true },
       { name: "name", label: "Document name", required: true, span2: true },
-      { name: "category", label: "Category", type: "select", options: ["Contracts", "NDAs", "Releases", "Project Documents", "Invoices", "Legal Documents", "Client Files"] },
+      { name: "category", label: "Category", type: "select", options: ["Contracts", "NDAs", "Releases", "Project Documents", "Invoices", "Legal Documents", "Client Files", "Forms & Templates", "Department Manuals", "Financial"] },
       { name: "confidential", label: "Access", type: "select", options: [["false", "Company-wide (subject to normal rules)"], ["true", "Confidential — executives only"]] },
       { name: "tags", label: "Tags (comma-separated)" },
     ], async (v, close) => {
