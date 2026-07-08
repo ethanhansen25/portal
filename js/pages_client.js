@@ -198,13 +198,18 @@
       <b>${esc(d.name)}</b><span class="muted">${U.cap(d.kind)} · ${esc((S.find("project", d.projectId) || {}).name || "")}</span>
       ${d.clientNotes ? `<p class="body-text">"${esc(d.clientNotes)}"</p>` : ""}
       <div class="eq-actions">
-        ${d.storagePath ? `<button class="btn btn-ghost btn-sm" data-open="${d.id}">⤓ View</button>` : ""}
+        ${d.storagePath ? `<button class="btn btn-ghost btn-sm" data-open="${d.id}">⤓ Preview</button>` : ""}
+        ${d.storagePath && d.downloadPermission ? `<button class="btn btn-gold btn-sm" data-download="${d.id}">⬇ Download</button>` : ""}
         ${opts.canReview && d.status === "sent_to_client" ? `<button class="btn btn-gold btn-sm" data-approve="${d.id}">Approve</button><button class="btn btn-ghost btn-sm" data-revise="${d.id}">Request revision</button>` : ""}
       </div>
     </div>`;
   }
   function bindDeliverableActions(el, redraw) {
     el.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => OM.actions.openAttachment(S.find("deliverable", b.dataset.open).storagePath)));
+    el.querySelectorAll("[data-download]").forEach((b) => b.addEventListener("click", () => {
+      const d = S.find("deliverable", b.dataset.download);
+      OM.actions.downloadAttachment(d.storagePath, d.name);
+    }));
     el.querySelectorAll("[data-approve]").forEach((b) => b.addEventListener("click", () => {
       ui.confirmModal("Approve deliverable", "Approve this deliverable as final?", () => {
         S.clientReviewDeliverable(b.dataset.approve, "client_approved", null).then(() => { ui.toast("Approved.", "good"); redraw(); }).catch((e) => ui.toast(e.message, "bad"));

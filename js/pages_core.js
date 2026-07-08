@@ -361,7 +361,9 @@
         <div><span class="detail-label">Version</span><b>v${d.version}</b></div>
         <div><span class="detail-label">Uploaded by</span><b>${esc(S.userName(d.uploadedBy))}</b></div>
       </div>
-      ${d.storagePath ? `<div class="row-gap"><button class="btn btn-ghost btn-sm" id="dlOpenFile">⤓ Open file</button></div>` : '<p class="muted">No file attached yet.</p>'}
+      ${d.storagePath ? `<div class="row-gap"><button class="btn btn-ghost btn-sm" id="dlOpenFile">⤓ Open file</button>
+        <label class="check-row"><input type="checkbox" id="dlDownloadPerm" ${d.downloadPermission ? "checked" : ""}><span>Allow client to download this file</span></label></div>`
+        : '<p class="muted">No file attached yet.</p>'}
       <h4 class="modal-sub">Client-facing notes</h4>
       <textarea id="dlClientNotes" class="body-text" rows="3" style="width:100%">${esc(d.clientNotes || "")}</textarea>
       <div class="row-gap"><button class="btn btn-ghost btn-sm" id="dlSaveNotes">Save client notes</button></div>
@@ -376,6 +378,11 @@
     });
     const c2 = m.el.querySelector('[data-role="cancel2"]'); if (c2) c2.addEventListener("click", m.close);
     const openBtn = m.el.querySelector("#dlOpenFile"); if (openBtn) openBtn.addEventListener("click", () => OM.actions.openAttachment(d.storagePath));
+    const dlPerm = m.el.querySelector("#dlDownloadPerm");
+    if (dlPerm) dlPerm.addEventListener("change", () => {
+      S.update("deliverable", d.id, { downloadPermission: dlPerm.checked }, (dlPerm.checked ? "Enabled" : "Disabled") + " client download — " + d.name);
+      ui.toast(dlPerm.checked ? "Client can now download this file." : "Client download turned off.", "good");
+    });
     m.el.querySelector("#dlSaveNotes").addEventListener("click", () => {
       const val = m.el.querySelector("#dlClientNotes").value;
       S.update("deliverable", d.id, { clientNotes: val }, "Updated client-facing notes — " + d.name);
@@ -452,6 +459,23 @@
       window.open(url, "_blank", "noopener");
     } catch (err) {
       ui.toast("Couldn't open file: " + err.message, "bad");
+    }
+  };
+  // Forces an actual file download (vs. openAttachment's preview-in-new-tab)
+  // by fetching the signed URL as a blob and clicking a temporary <a download>.
+  OM.actions.downloadAttachment = async function (storagePath, filename) {
+    if (!storagePath) { ui.toast("This record has no file attached.", "bad"); return; }
+    try {
+      const url = await OM.db.attachmentSignedUrl(storagePath);
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl; a.download = filename || storagePath.split("/").pop();
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+    } catch (err) {
+      ui.toast("Couldn't download file: " + err.message, "bad");
     }
   };
 
