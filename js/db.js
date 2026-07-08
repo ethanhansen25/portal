@@ -54,6 +54,10 @@
       table: "onboarding_files", coll: "onboardingFiles",
       cols: { id: "id", assignment_id: "assignmentId", name: "name", storage_path: "storagePath", uploaded_by: "uploadedBy", uploaded_at: "uploadedAt" },
     },
+    onboardingResource: {
+      table: "onboarding_resources", coll: "onboardingResources",
+      cols: { id: "id", name: "name", category: "category", audience: "audience", storage_path: "storagePath", size_bytes: "sizeBytes", uploaded_by: "uploadedBy", uploaded_at: "uploadedAt" },
+    },
     deliverable: {
       table: "deliverables", coll: "deliverables",
       cols: { id: "id", project_id: "projectId", client_id: "clientId", name: "name", kind: "kind", status: "status", version: "version", storage_path: "storagePath", thumbnail_path: "thumbnailPath", notes: "notes", client_notes: "clientNotes", download_permission: "downloadPermission", uploaded_by: "uploadedBy", uploaded_at: "uploadedAt", due_date: "dueDate" },

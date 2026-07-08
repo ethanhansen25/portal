@@ -133,10 +133,15 @@
     const tasks = (a.tasks || []).slice().sort((x, y) => x.position - y.position);
     const done = tasks.filter((t) => t.done).length;
     const files = a.files || [];
+    // Exec-uploaded library files (js/pages_exec.js execOnboarding) tagged
+    // for clients — RLS already only returns rows this profile can see.
+    const resources = S.db.onboardingResources.filter((r) => r.audience !== "staff");
     return ui.sectionCard("Getting you set up", `
       <div class="onboard-progress"><span class="muted">${done} of ${tasks.length} complete</span>${ch.meter(tasks.length ? Math.round((done / tasks.length) * 100) : 0)}</div>
       ${tasks.map((t) => `<label class="list-row onboard-item"><input type="checkbox" data-onb-task="${t.id}" ${t.done ? "checked" : ""}>
         <span class="list-main"><b>${esc(t.text)}</b></span></label>`).join("")}
+      ${resources.length ? `<h4 class="modal-sub">Resources from Oakframe</h4>
+      ${resources.map((r) => `<div class="list-row"><span class="file-icon">${OM.icon("file")}</span><span class="list-main"><b>${esc(r.name)}</b></span><button class="btn btn-ghost btn-sm" data-onb-res="${r.id}">⤓</button></div>`).join("")}` : ""}
       <h4 class="modal-sub">Files</h4>
       ${files.map((f) => `<div class="list-row"><span class="file-icon">FILE</span><span class="list-main"><b>${esc(f.name)}</b></span><button class="btn btn-ghost btn-sm" data-onb-file="${f.id}">⤓</button></div>`).join("") || '<p class="muted">No files yet.</p>'}
       <div class="row-gap"><input type="file" id="onbFileInput" hidden><button class="btn btn-ghost btn-sm" id="onbFileBtn">+ Upload a file</button></div>
@@ -150,6 +155,10 @@
     el.querySelectorAll("[data-onb-file]").forEach((b) => b.addEventListener("click", () => {
       const f = S.find("onboardingFile", b.dataset.onbFile);
       OM.actions.openAttachment(f.storagePath);
+    }));
+    el.querySelectorAll("[data-onb-res]").forEach((b) => b.addEventListener("click", () => {
+      const r = S.find("onboardingResource", b.dataset.onbRes);
+      OM.actions.openAttachment(r.storagePath);
     }));
     const fileBtn = el.querySelector("#onbFileBtn"), fileInput = el.querySelector("#onbFileInput");
     if (fileBtn) fileBtn.addEventListener("click", () => fileInput.click());

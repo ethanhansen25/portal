@@ -356,8 +356,8 @@
           if (action === "create" || action === "edit") return role !== "intern";
           return level >= 60;
         }
-        case "initiative": case "risk": case "boardNote":
-          return false; // exec only
+        case "initiative": case "risk": case "boardNote": case "onboardingResource":
+          return false; // exec only (view is unrestricted — RLS scopes reads by audience)
         case "hrNote":
           return dept === "Human Resources";
         case "onboardingTemplate": case "onboardingAssignment":

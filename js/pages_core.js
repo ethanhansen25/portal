@@ -62,28 +62,55 @@
             </div>`).join("") : ui.empty("You're not on any active projects."))}
         </div>
       </div>`;
-    if (myOnboarding) bindOnboardingCard(el);
+    if (myOnboarding) bindOnboardingCard(el, myOnboarding.id);
   };
 
   // Self-service onboarding checklist shown on Home until HR gives final
   // approval — each item is owned by the employee (or HR/exec) per
-  // complete_onboarding_task()'s authorization check.
+  // complete_onboarding_task()'s authorization check. File upload mirrors
+  // the client-portal version (clientOnboardingCard in pages_client.js) —
+  // staff previously had no way to attach a requested document (signed
+  // offer letter, W-9, ID) to their own onboarding at all.
   function onboardingCard(a) {
     const tasks = (a.tasks || []).slice().sort((x, y) => x.position - y.position);
     const done = tasks.filter((t) => t.done).length;
+    const files = a.files || [];
+    // Exec-uploaded library files (js/pages_exec.js execOnboarding) tagged
+    // for staff — RLS already only returns rows this profile can see.
+    const resources = S.db.onboardingResources.filter((r) => r.audience !== "client");
     return ui.sectionCard("Your onboarding checklist", `
       <div class="onboard-progress"><span class="muted">${done} of ${tasks.length} complete</span>${ch.meter(tasks.length ? Math.round((done / tasks.length) * 100) : 0)}</div>
       ${tasks.map((t) => `
         <label class="list-row onboard-item"><input type="checkbox" data-onb-task="${t.id}" ${t.done ? "checked" : ""}>
           <span class="list-main"><b>${esc(t.text)}</b><span class="muted">${U.cap(t.category || "general")}</span></span>
         </label>`).join("")}
+      ${resources.length ? `<h4 class="modal-sub">Resources from HR</h4>
+      ${resources.map((r) => `<div class="list-row"><span class="list-icon">${OM.icon("file")}</span><span class="list-main"><b>${esc(r.name)}</b></span><button class="btn btn-ghost btn-sm" data-onb-res="${r.id}">⤓</button></div>`).join("")}` : ""}
+      <h4 class="modal-sub">Files</h4>
+      ${files.map((f) => `<div class="list-row"><span class="list-icon">${OM.icon("file")}</span><span class="list-main"><b>${esc(f.name)}</b></span><button class="btn btn-ghost btn-sm" data-onb-file="${f.id}">⤓</button></div>`).join("") || '<p class="muted">No files yet.</p>'}
+      <div class="row-gap"><input type="file" id="onbFileInput" hidden><button class="btn btn-ghost btn-sm" id="onbFileBtn">+ Upload a file</button></div>
       ${done === tasks.length && tasks.length ? `<div class="inline-note">All done — waiting on HR's final onboarding approval.</div>` : ""}
     `, { cls: "onboard-card" });
   }
-  function bindOnboardingCard(el) {
+  function bindOnboardingCard(el, assignmentId) {
     el.querySelectorAll("[data-onb-task]").forEach((cb) => cb.addEventListener("change", () => {
       S.completeOnboardingTask(cb.dataset.onbTask, cb.checked).then(() => OM.router.refresh()).catch((e) => ui.toast(e.message, "bad"));
     }));
+    el.querySelectorAll("[data-onb-file]").forEach((b) => b.addEventListener("click", () => {
+      const f = S.find("onboardingFile", b.dataset.onbFile);
+      OM.actions.openAttachment(f.storagePath);
+    }));
+    el.querySelectorAll("[data-onb-res]").forEach((b) => b.addEventListener("click", () => {
+      const r = S.find("onboardingResource", b.dataset.onbRes);
+      OM.actions.openAttachment(r.storagePath);
+    }));
+    const fileBtn = el.querySelector("#onbFileBtn"), fileInput = el.querySelector("#onbFileInput");
+    if (fileBtn) fileBtn.addEventListener("click", () => fileInput.click());
+    if (fileInput) fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0]; if (!file) return;
+      try { await S.uploadOnboardingFile(assignmentId, file); ui.toast("File uploaded.", "good"); OM.router.refresh(); }
+      catch (e) { ui.toast("Upload failed: " + e.message, "bad"); }
+    });
   }
 
   function taskRow(t) {
