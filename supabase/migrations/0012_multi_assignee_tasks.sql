@@ -37,22 +37,31 @@ language sql security definer stable set search_path = public as $$
       or exists (select 1 from task_assignees ta where ta.task_id = tid and ta.user_id = auth.uid())
 $$;
 
+-- IMPORTANT: tasks_select/tasks_update must reach task_assignees only
+-- through the can_view_task() SECURITY DEFINER function, never via a raw
+-- inline subquery. A raw subquery here evaluates task_assignees' own RLS
+-- under the CALLING role (not bypassed), and that policy calls
+-- can_view_task() which reads tasks again — two tables whose policies
+-- reference each other directly trigger "infinite recursion detected in
+-- policy for relation tasks". Routing both hops through single-purpose
+-- definer functions (mirroring how projects_select/project_team_select
+-- both go through can_view_project() rather than inlining each other's
+-- tables) breaks the cycle: each function bypasses RLS on what it reads
+-- internally, so neither policy's own RLS is ever re-entered mid-evaluation.
 drop policy if exists "tasks_select" on tasks;
-create policy "tasks_select" on tasks for select
-  using (is_exec() or my_role() = 'dept_head'
-    or assignee_id = auth.uid() or created_by = auth.uid()
-    or (project_id is not null and can_view_project(project_id))
-    or exists (select 1 from task_assignees ta where ta.task_id = id and ta.user_id = auth.uid()));
+create policy "tasks_select" on tasks for select using (can_view_task(id));
 drop policy if exists "tasks_update" on tasks;
-create policy "tasks_update" on tasks for update
-  using (is_exec() or my_role() = 'dept_head'
-    or assignee_id = auth.uid() or created_by = auth.uid()
-    or (project_id is not null and can_view_project(project_id))
-    or exists (select 1 from task_assignees ta where ta.task_id = id and ta.user_id = auth.uid()));
+create policy "tasks_update" on tasks for update using (can_view_task(id));
+
+-- Same reasoning as above, mirroring can_manage_project(): wrap the
+-- tasks lookup in its own definer function rather than an inline subquery
+-- directly in a task_assignees policy.
+create or replace function can_manage_task(tid uuid) returns boolean
+language sql security definer stable set search_path = public as $$
+  select is_exec() or my_role() = 'dept_head'
+    or exists (select 1 from tasks t where t.id = tid and (t.created_by = auth.uid() or (t.project_id is not null and can_manage_project(t.project_id))))
+$$;
 
 create policy "task_assignees_select" on task_assignees for select using (can_view_task(task_id));
 create policy "task_assignees_write" on task_assignees for all
-  using (is_exec() or my_role() = 'dept_head'
-    or exists (select 1 from tasks t where t.id = task_id and (t.created_by = auth.uid() or (t.project_id is not null and can_manage_project(t.project_id)))))
-  with check (is_exec() or my_role() = 'dept_head'
-    or exists (select 1 from tasks t where t.id = task_id and (t.created_by = auth.uid() or (t.project_id is not null and can_manage_project(t.project_id)))));
+  using (can_manage_task(task_id)) with check (can_manage_task(task_id));
