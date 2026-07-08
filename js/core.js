@@ -358,8 +358,18 @@
         }
         case "initiative": case "risk": case "boardNote":
           return false; // exec only
-        case "hrNote": case "onboardingTemplate": case "onboardingAssignment":
+        case "hrNote":
           return dept === "Human Resources";
+        case "onboardingTemplate": case "onboardingAssignment":
+          // Sales manages client onboarding; HR keeps managing staff
+          // onboarding — matches onboarding_templates_write/onboarding_
+          // assignments_write (0013), which grant both departments equally.
+          return dept === "Human Resources" || dept === "Sales";
+        case "onboardingFile": {
+          if (dept === "Human Resources" || dept === "Sales" || role === "dept_head") return true;
+          const a = rec && S.find("onboardingAssignment", rec.assignmentId);
+          return !!(a && a.profileId === u.id);
+        }
         case "deliverable": {
           if (action === "view") return !rec || role === "dept_head" || inMyProjects(rec.projectId);
           if (action === "create") return role === "dept_head" || ["Production", "Creative"].includes(dept);
@@ -681,6 +691,20 @@
       S.assertCan("edit", "onboardingAssignment", null);
       return OM.db.rpc("approve_onboarding", { p_assignment_id: assignmentId })
         .then(() => S.resync("onboardingAssignments", "notifications"));
+    },
+    // Attaches a checklist to someone who's already active (client or staff)
+    // — approve_user() only seeds onboarding at the moment of initial
+    // approval, so anything assigned later goes through this RPC instead.
+    assignOnboarding(profileId, templateId) {
+      S.assertCan("create", "onboardingAssignment", null);
+      return OM.db.rpc("assign_onboarding", { p_profile_id: profileId, p_template_id: templateId })
+        .then(() => S.resync("onboardingAssignments", "notifications"));
+    },
+    uploadOnboardingFile(assignmentId, file) {
+      return (async () => {
+        const { path } = await OM.db.uploadAttachment("onboarding", assignmentId, file);
+        S.create("onboardingFile", { assignmentId, name: file.name, storagePath: path, uploadedBy: S.meId }, "Uploaded onboarding file — " + file.name);
+      })();
     },
 
     // ---------- contracts ----------

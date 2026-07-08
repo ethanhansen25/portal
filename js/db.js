@@ -35,7 +35,7 @@
     },
     onboardingTemplate: {
       table: "onboarding_templates", coll: "onboardingTemplates",
-      cols: { id: "id", dept: "dept", name: "name", created_by: "createdBy", created_at: "createdAt" },
+      cols: { id: "id", dept: "dept", name: "name", audience: "audience", created_by: "createdBy", created_at: "createdAt" },
       embeds: { onboarding_template_tasks: { as: "tasks", select: "*", map: (r) => ({ id: r.id, text: r.text, category: r.category, position: r.position }) } },
     },
     onboardingTemplateTask: {
@@ -45,7 +45,14 @@
     onboardingAssignment: {
       table: "onboarding_assignments", coll: "onboardingAssignments",
       cols: { id: "id", profile_id: "profileId", template_id: "templateId", assigned_by: "assignedBy", assigned_at: "assignedAt", approved_by: "approvedBy", approved_at: "approvedAt" },
-      embeds: { onboarding_task_progress: { as: "tasks", select: "*", map: (r) => ({ id: r.id, templateTaskId: r.template_task_id, text: r.text, category: r.category, position: r.position, done: r.done, doneAt: parseTs(r.done_at), doneBy: r.done_by }) } },
+      embeds: {
+        onboarding_task_progress: { as: "tasks", select: "*", map: (r) => ({ id: r.id, templateTaskId: r.template_task_id, text: r.text, category: r.category, position: r.position, done: r.done, doneAt: parseTs(r.done_at), doneBy: r.done_by }) },
+        onboarding_files: { as: "files", select: "*", map: (r) => ({ id: r.id, name: r.name, storagePath: r.storage_path, uploadedBy: r.uploaded_by, uploadedAt: parseTs(r.uploaded_at) }) },
+      },
+    },
+    onboardingFile: {
+      table: "onboarding_files", coll: "onboardingFiles",
+      cols: { id: "id", assignment_id: "assignmentId", name: "name", storage_path: "storagePath", uploaded_by: "uploadedBy", uploaded_at: "uploadedAt" },
     },
     deliverable: {
       table: "deliverables", coll: "deliverables",

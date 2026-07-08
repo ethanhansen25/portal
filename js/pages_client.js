@@ -125,8 +125,44 @@
   CP.pages = {};
 
   /* ================= DASHBOARD ================= */
+  // Shown on the client dashboard only while onboarding is incomplete or
+  // awaiting HR/Sales final sign-off — disappears entirely the moment
+  // approvedAt is set, per "add onboarding to clients, but remove after
+  // completed."
+  function clientOnboardingCard(a) {
+    const tasks = (a.tasks || []).slice().sort((x, y) => x.position - y.position);
+    const done = tasks.filter((t) => t.done).length;
+    const files = a.files || [];
+    return ui.sectionCard("Getting you set up", `
+      <div class="onboard-progress"><span class="muted">${done} of ${tasks.length} complete</span>${ch.meter(tasks.length ? Math.round((done / tasks.length) * 100) : 0)}</div>
+      ${tasks.map((t) => `<label class="list-row onboard-item"><input type="checkbox" data-onb-task="${t.id}" ${t.done ? "checked" : ""}>
+        <span class="list-main"><b>${esc(t.text)}</b></span></label>`).join("")}
+      <h4 class="modal-sub">Files</h4>
+      ${files.map((f) => `<div class="list-row"><span class="file-icon">FILE</span><span class="list-main"><b>${esc(f.name)}</b></span><button class="btn btn-ghost btn-sm" data-onb-file="${f.id}">⤓</button></div>`).join("") || '<p class="muted">No files yet.</p>'}
+      <div class="row-gap"><input type="file" id="onbFileInput" hidden><button class="btn btn-ghost btn-sm" id="onbFileBtn">+ Upload a file</button></div>
+      ${done === tasks.length && tasks.length ? `<div class="inline-note">All done — waiting on final sign-off.</div>` : ""}
+    `);
+  }
+  function bindClientOnboardingCard(el, assignmentId) {
+    el.querySelectorAll("[data-onb-task]").forEach((cb) => cb.addEventListener("change", () => {
+      S.completeOnboardingTask(cb.dataset.onbTask, cb.checked).then(() => CP.router.refresh()).catch((e) => ui.toast(e.message, "bad"));
+    }));
+    el.querySelectorAll("[data-onb-file]").forEach((b) => b.addEventListener("click", () => {
+      const f = S.find("onboardingFile", b.dataset.onbFile);
+      OM.actions.openAttachment(f.storagePath);
+    }));
+    const fileBtn = el.querySelector("#onbFileBtn"), fileInput = el.querySelector("#onbFileInput");
+    if (fileBtn) fileBtn.addEventListener("click", () => fileInput.click());
+    if (fileInput) fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0]; if (!file) return;
+      try { await S.uploadOnboardingFile(assignmentId, file); ui.toast("File uploaded.", "good"); CP.router.refresh(); }
+      catch (e) { ui.toast("Upload failed: " + e.message, "bad"); }
+    });
+  }
+
   CP.pages.dashboard = function (el) {
     const u = me(), client = myClient();
+    const myOnboarding = S.db.onboardingAssignments.find((a) => a.profileId === u.id && !a.approvedAt);
     const projects = myProjects().filter((p) => p.status === "active");
     const deliverables = S.db.deliverables.filter((d) => d.clientId === u.clientId);
     const awaitingApproval = deliverables.filter((d) => d.status === "sent_to_client");
@@ -138,6 +174,7 @@
     const recentFiles = S.db.documents.filter((d) => d.clientId === u.clientId && ["client_visible", "final_delivery"].includes(d.visibility)).sort((a, b) => b.uploadedAt - a.uploadedAt);
 
     el.innerHTML = ui.pageHead(`Welcome, ${esc(u.name.split(" ")[0])}`, esc(client ? client.name : "") + " · " + new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })) +
+      (myOnboarding ? clientOnboardingCard(myOnboarding) : "") +
       ui.kpi([
         { label: "Active projects", value: projects.length, link: "#/c/projects" },
         { label: "Awaiting your approval", value: awaitingApproval.length, tone: awaitingApproval.length ? "warn" : null, link: "#/c/approvals" },
@@ -158,6 +195,7 @@
           ${ui.sectionCard("Recent files", recentFiles.slice(0, 5).map((d) => `<div class="list-row"><span class="file-icon">${d.type.toUpperCase()}</span><span class="list-main"><b>${esc(d.name)}</b><span class="muted">${U.date(d.uploadedAt)}</span></span></div>`).join("") || ui.empty("No files yet."), { action: '<a class="link" href="#/c/files">All files →</a>' })}
         </div>
       </div>`;
+    if (myOnboarding) bindClientOnboardingCard(el, myOnboarding.id);
   };
 
   /* ================= PROJECTS ================= */

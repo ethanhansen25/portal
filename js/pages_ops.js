@@ -280,35 +280,60 @@
         close(); OM.router.refresh();
       }));
     } else if (tab === "onboarding") {
-      const canManage = S.isExec(S.me()) || S.me().dept === "Human Resources";
+      const me = S.me();
+      const canManage = S.isExec(me) || me.dept === "Human Resources" || me.dept === "Sales";
+      const staffTemplates = S.db.onboardingTemplates.filter((t) => t.audience !== "client");
+      const clientTemplates = S.db.onboardingTemplates.filter((t) => t.audience === "client");
       const inProgress = S.db.onboardingAssignments.filter((a) => !a.approvedAt);
+      function templateRow(t, assignBtn) {
+        return `<div class="list-row clickable" data-template="${t.id}"><span class="list-icon">▤</span>
+          <span class="list-main"><b>${esc(t.name)}</b><span class="muted">${esc(t.dept || "All departments")} · ${(t.tasks || []).length} tasks</span></span>
+          ${assignBtn ? `<button class="btn btn-ghost btn-sm" data-assign-tmpl="${t.id}">Assign to client</button>` : ""}
+        </div>`;
+      }
       body.innerHTML =
-        ui.sectionCard("Templates", S.db.onboardingTemplates.map((t) => `
-          <div class="list-row"><span class="list-icon">▤</span>
-            <span class="list-main"><b>${esc(t.name)}</b><span class="muted">${esc(t.dept || "All departments")} · ${(t.tasks || []).length} tasks</span></span>
-          </div>`).join("") || ui.empty("No onboarding templates yet."),
-          { action: canManage ? '<button class="btn btn-gold btn-sm" id="newTemplate">+ New template</button>' : "" }) +
+        ui.sectionCard("Staff templates", staffTemplates.map((t) => templateRow(t)).join("") || ui.empty("No staff onboarding templates yet."),
+          { action: canManage ? '<button class="btn btn-gold btn-sm" id="newTemplateStaff">+ New staff template</button>' : "" }) +
+        ui.sectionCard("Client templates", clientTemplates.map((t) => templateRow(t, canManage)).join("") || ui.empty("No client onboarding templates yet."),
+          { action: canManage ? '<button class="btn btn-gold btn-sm" id="newTemplateClient">+ New client template</button>' : "" }) +
         ui.sectionCard("In progress", inProgress.map((a) => {
-          const emp = S.find("user", a.profileId);
+          const person = S.find("user", a.profileId);
           const tmpl = S.find("onboardingTemplate", a.templateId);
           const done = (a.tasks || []).filter((t) => t.done).length, total = (a.tasks || []).length;
           const allDone = total > 0 && done === total;
           return `<div class="list-row"><span class="list-icon">☺</span>
-            <span class="list-main"><b>${esc(emp ? emp.name : "—")}</b><span class="muted">${esc(tmpl ? tmpl.name : "—")} · ${done}/${total} tasks complete</span></span>
+            <span class="list-main"><b>${esc(person ? person.name : "—")}</b><span class="muted">${esc(tmpl ? tmpl.name : "—")}${person && person.portalType === "client" ? " · Client" : ""} · ${done}/${total} tasks complete</span></span>
             ${allDone && canManage ? `<button class="btn btn-gold btn-sm" data-approve-onb="${a.id}">Give final approval</button>` : ui.badge(allDone ? "ready" : "in_progress")}
           </div>`;
         }).join("") || ui.empty("Nobody is mid-onboarding right now."));
-      const nt = body.querySelector("#newTemplate");
-      if (nt) nt.addEventListener("click", () => ui.formModal("New onboarding template", [
-        { name: "name", label: "Template name", required: true, placeholder: "e.g. Production — New Hire" },
-        { name: "dept", label: "Department", type: "select", options: [["", "— All departments —"], "Executive", "Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration", "Contractors"] },
-        { name: "tasks", label: "Checklist (one item per line)", type: "textarea", span2: true, rows: 14, required: true,
-          value: ["Welcome message", "Account setup", "Company handbook", "NDA / contract", "Tax / payment info", "Role expectations", "Department training", "Brand guidelines", "Software access", "First assignments", "Manager intro", "Equipment assignment", "Final onboarding approval"].join("\n") },
-      ], (v, close) => {
-        const tasks = v.tasks.split("\n").map((s) => s.trim()).filter(Boolean).map((text) => ({ text, category: "general" }));
-        S.create("onboardingTemplate", { name: v.name, dept: v.dept || null, tasks }, "Created onboarding template — " + v.name);
-        close(); ui.toast("Template created.", "good"); OM.router.refresh();
-      }, { wide: true }));
+
+      function newTemplateModal(audience) {
+        ui.formModal("New " + (audience === "client" ? "client" : "staff") + " onboarding template", [
+          { name: "name", label: "Template name", required: true, placeholder: audience === "client" ? "e.g. New Client Kickoff" : "e.g. Production — New Hire" },
+          audience === "client"
+            ? { name: "dept", label: "Owning department", type: "select", options: [["", "— Any —"], "Sales", "Production", "Creative", "Executive"] }
+            : { name: "dept", label: "Department", type: "select", options: [["", "— All departments —"], "Executive", "Production", "Creative", "Sales", "Finance", "Human Resources", "Technology", "Administration", "Contractors"] },
+          { name: "tasks", label: "Checklist (one item per line)", type: "textarea", span2: true, rows: 14, required: true,
+            value: (audience === "client"
+              ? ["Sign MSA / contract", "Upload brand assets", "Schedule kickoff call", "Confirm point of contact", "Share drive / asset access", "Set up invoicing", "Send welcome packet"]
+              : ["Welcome message", "Account setup", "Company handbook", "NDA / contract", "Tax / payment info", "Role expectations", "Department training", "Brand guidelines", "Software access", "First assignments", "Manager intro", "Equipment assignment", "Final onboarding approval"]).join("\n") },
+        ], (v, close) => {
+          const tasks = v.tasks.split("\n").map((s) => s.trim()).filter(Boolean).map((text) => ({ text, category: "general" }));
+          S.create("onboardingTemplate", { name: v.name, dept: v.dept || null, audience, tasks }, "Created " + audience + " onboarding template — " + v.name);
+          close(); ui.toast("Template created.", "good"); OM.router.refresh();
+        }, { wide: true });
+      }
+      const ns = body.querySelector("#newTemplateStaff"); if (ns) ns.addEventListener("click", () => newTemplateModal("staff"));
+      const ncl = body.querySelector("#newTemplateClient"); if (ncl) ncl.addEventListener("click", () => newTemplateModal("client"));
+      body.querySelectorAll("[data-assign-tmpl]").forEach((b) => b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const clientUsers = S.db.users.filter((u) => u.status === "active" && u.portalType === "client").map((u) => [u.id, u.name + " · " + (S.find("client", u.clientId) || {}).name]);
+        ui.formModal("Assign onboarding to a client contact", [
+          { name: "profileId", label: "Client contact", type: "select", required: true, options: clientUsers },
+        ], (v, close) => {
+          S.assignOnboarding(v.profileId, b.dataset.assignTmpl).then(() => { close(); ui.toast("Onboarding assigned.", "good"); OM.router.refresh(); }).catch((err) => ui.toast(err.message, "bad"));
+        });
+      }));
       body.querySelectorAll("[data-approve-onb]").forEach((b) => b.addEventListener("click", () => {
         S.approveOnboarding(b.dataset.approveOnb).then(() => { ui.toast("Onboarding approved.", "good"); OM.router.refresh(); }).catch((e) => ui.toast(e.message, "bad"));
       }));
