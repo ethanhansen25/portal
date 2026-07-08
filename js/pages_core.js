@@ -1016,7 +1016,7 @@
     S.db.meetings.forEach((m) => {
       const invited = m.attendees === "all" || (m.attendees || []).includes(me.id) || S.isExec(me);
       if (m.private && !invited) return;
-      if (invited) items.push({ ts: m.ts, kind: "meeting", label: m.title, sub: (m.location || "") + " · " + (m.durationMin || 30) + "m" });
+      if (invited) items.push({ ts: m.ts, kind: "meeting", label: m.title, sub: (m.location || "") + " · " + (m.durationMin || 30) + "m", meetingId: m.id });
     });
     S.db.projects.filter((p) => p.status === "active" && (S.isExec(me) || S.myProjectIds().has(p.id))).forEach((p) => items.push({ ts: p.dueDate, kind: "deadline", label: p.name + " — delivery", sub: p.code, link: "#/project/" + p.id }));
     S.db.tasks.filter((t) => t.dueDate && t.status !== "done" && (isMyTask(t, me) || S.isExec(me))).forEach((t) => items.push({ ts: t.dueDate, kind: "task", label: t.title, sub: "Task due", link: "#/task/" + t.id }));
@@ -1030,16 +1030,73 @@
       (byDay[k] = byDay[k] || []).push(i);
     });
     const icons = { meeting: "◫", deadline: "▣", task: "☑", timeoff: "✈", finance: "$" };
-    el.innerHTML = ui.pageHead("Company calendar", "Meetings, deliveries, deadlines, and time off — next 30 days") +
+    el.innerHTML = ui.pageHead("Company calendar", "Meetings, deliveries, deadlines, and time off — next 30 days",
+        S.can("create", "meeting") ? `<button class="btn btn-gold" id="newMeeting">+ New meeting</button>` : "") +
       (Object.keys(byDay).length ? Object.entries(byDay).slice(0, 30).map(([day, evts]) => {
         const d = new Date(+day);
         const isToday = U.sameDay(+day, Date.now());
         return `<div class="cal-day ${isToday ? "today" : ""}">
           <div class="cal-date"><b>${d.toLocaleDateString("en-US", { weekday: "short" })}</b><span>${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>${isToday ? '<span class="badge tone-info">Today</span>' : ""}</div>
-          <div class="cal-events">${evts.map((e) => `<div class="cal-event ${e.link ? "clickable" : ""}" ${e.link ? `onclick="location.hash='${e.link}'"` : ""}><span class="list-icon">${icons[e.kind] || "•"}</span><span class="list-main"><b>${esc(e.label)}</b><span class="muted">${U.time(e.ts)} · ${esc(e.sub || "")}</span></span></div>`).join("")}</div>
+          <div class="cal-events">${evts.map((e) => `<div class="cal-event ${(e.link || e.meetingId) ? "clickable" : ""}" ${e.link ? `onclick="location.hash='${e.link}'"` : ""} ${e.meetingId ? `data-meeting="${e.meetingId}"` : ""}><span class="list-icon">${icons[e.kind] || "•"}</span><span class="list-main"><b>${esc(e.label)}</b><span class="muted">${U.time(e.ts)} · ${esc(e.sub || "")}</span></span></div>`).join("")}</div>
         </div>`;
       }).join("") : ui.empty("Nothing on the calendar."));
+    const nm = el.querySelector("#newMeeting");
+    if (nm) nm.addEventListener("click", () => meetingModal());
+    el.querySelectorAll("[data-meeting]").forEach((row) => row.addEventListener("click", () => meetingModal(S.find("meeting", row.dataset.meeting))));
   };
+
+  /* ================= MEETINGS (create/edit) =================
+     Attendee options are scoped by role: executives can invite anyone
+     (staff or client); a department head can invite their own department
+     plus any client; everyone else invites staff only — matching "execs
+     schedule with everything, dept heads with their dept + clients." */
+  function meetingModal(m) {
+    const me = S.me();
+    const isExec = S.isExec(me);
+    const isOwnerOrExec = !m || isExec || m.ownerId === me.id;
+    const attendeeFilter = (u) => {
+      if (u.portalType === "client") return isExec || me.role === "dept_head";
+      if (me.role === "dept_head" && !isExec) return u.dept === me.dept || u.id === me.id;
+      return true;
+    };
+    const fields = [
+      { name: "title", label: "Title", value: m && m.title, required: true, span2: true },
+      { name: "startsAt", label: "Date & time", type: "datetime-local", required: true, value: m ? new Date(m.ts - new Date(m.ts).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "" },
+      { name: "durationMin", label: "Duration (min)", type: "number", value: m ? m.durationMin : 30 },
+      { name: "location", label: "Location / link", value: m && m.location, placeholder: "Conference room, Zoom link…" },
+      { name: "clientId", label: "Client (optional)", type: "select", options: [["", "— None —"]].concat(S.db.clients.map((c) => [c.id, c.name])), value: m && m.clientId },
+      { name: "projectId", label: "Project (optional)", type: "select", options: [["", "— None —"]].concat(S.db.projects.filter((p) => p.status !== "archived").map((p) => [p.id, p.code + " · " + p.name])), value: m && m.projectId },
+      { name: "attendeeIds", label: "Attendees", type: "userMulti", span2: true, filter: attendeeFilter, value: m && Array.isArray(m.attendees) ? m.attendees : [] },
+      { name: "private", label: "Private (attendees only)", type: "select", options: [["false", "No — visible company-wide"], ["true", "Yes — attendees only"]], value: m ? String(!!m.private) : "false" },
+    ];
+    const modalRef = ui.formModal(m ? "Edit meeting" : "New meeting", fields, (v, close) => {
+      const assigneeIds = assigneeIdsFrom({ assigneeIds: v.attendeeIds });
+      const patch = {
+        title: v.title, ts: new Date(v.startsAt).getTime(), durationMin: +v.durationMin || 30,
+        location: v.location || null, clientId: v.clientId || null, projectId: v.projectId || null,
+        private: v.private === "true",
+      };
+      if (m) {
+        S.update("meeting", m.id, patch, "Updated meeting — " + v.title);
+        S.setMeetingAttendees(m.id, assigneeIds);
+      } else {
+        const created = S.create("meeting", Object.assign({ ownerId: me.id, attendees: assigneeIds, recurring: null, allStaff: false }, patch), "Scheduled meeting — " + v.title);
+        if (assigneeIds.length) S.notify(assigneeIds, "meeting", "Invited: " + v.title, U.dateTime(patch.ts), "#/calendar");
+      }
+      close(); ui.toast(m ? "Meeting updated." : "Meeting scheduled.", "good"); OM.router.refresh();
+    }, {
+      wide: true,
+      footer: (m && (isOwnerOrExec || S.can("delete", "meeting", m))) ? `<button class="btn btn-danger-ghost" id="delMeeting">Delete meeting</button>` : undefined,
+    });
+    if (m) {
+      const del = modalRef.el.querySelector("#delMeeting");
+      if (del) del.addEventListener("click", () => ui.confirmModal("Delete meeting", `Cancel "<b>${esc(m.title)}</b>"? This is recorded in the audit log.`, (reason) => {
+        S.remove("meeting", m.id, reason);
+        modalRef.close();
+        ui.toast("Meeting cancelled.", "good"); OM.router.refresh();
+      }, { danger: true, reason: true, okLabel: "Delete" }));
+    }
+  }
 
   /* ================= DIRECTORY ================= */
   OM.pages.directory = function (el) {

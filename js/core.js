@@ -572,6 +572,20 @@
         if (next.length) await OM.db.from("task_assignees").insert(next.map((uid) => ({ task_id: taskId, user_id: uid })));
       })(), "Set task assignees", ["tasks"]);
     },
+    setMeetingAttendees(meetingId, userIds) {
+      const m = S.find("meeting", meetingId); if (!m) return;
+      S.assertCan("edit", "meeting", m);
+      const prev = new Set(Array.isArray(m.attendees) ? m.attendees : []);
+      const next = Array.from(new Set(userIds || []));
+      m.attendees = next;
+      const added = next.filter((id) => !prev.has(id));
+      added.forEach((uid) => { if (uid !== S.meId) S.notify(uid, "meeting", "Invited: " + m.title, U.dateTime(m.ts), "#/calendar"); });
+      S.audit("assign", "meeting", meetingId, "Set attendees on \"" + m.title + "\"");
+      S._bg((async () => {
+        await OM.db.from("meeting_attendees").delete().eq("meeting_id", meetingId);
+        if (next.length) await OM.db.from("meeting_attendees").insert(next.map((uid) => ({ meeting_id: meetingId, user_id: uid })));
+      })(), "Set meeting attendees", ["meetings"]);
+    },
 
     /* ---------- DOMAIN ACTIONS ---------- */
     logCall(data) {

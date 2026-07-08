@@ -272,6 +272,7 @@
   function formModal(title, fields, onSubmit, opts = {}) {
     return modal(title, form(fields, opts.submitLabel || "Save"), {
       wide: opts.wide,
+      footer: opts.footer,
       onMount(wrap, close) {
         initDropdowns(wrap);
         const formEl = wrap.querySelector("form");
