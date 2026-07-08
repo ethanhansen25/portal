@@ -45,6 +45,10 @@
     lifeBuoy: S(`<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/><path d="m6.3 6.3 3.5 3.5M17.7 6.3l-3.5 3.5M6.3 17.7l3.5-3.5M17.7 17.7l-3.5-3.5"/>`),
     clock: S(`<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.3l3.5 2"/>`),
     grid: S(`<rect x="3.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.2"/>`),
+    // Oakframe Media's real mark, traced from the brand logo — a viewfinder
+    // around a lens, not a placeholder glyph. Used everywhere the sidebar/
+    // boot screen previously showed a plain "O" letter.
+    oakframeMark: S(`<path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/><circle cx="12" cy="12" r="4.2"/><circle cx="12" cy="12" r="2.6"/><circle cx="12" cy="12" r="0.6" fill="currentColor"/>`),
   };
 
   OM.icon = function (name, cls) {
